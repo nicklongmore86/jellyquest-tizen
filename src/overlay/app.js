@@ -90,19 +90,69 @@
         });
     }
 
+    // ---- Playback ------------------------------------------------------
+    //
+    // playbackManager.play() cannot turn `ids` into playable items on its
+    // own. With no `items` in the options it demands a server to query and
+    // refuses outright otherwise -- `if (!items) { if (!options.serverId) {
+    // throw new Error('serverId required!'); } }`, in
+    // .cache/jellyfin-web/src/components/playback/playbackmanager.js:2101.
+    // `ids` + `serverId` is the shape jellyfin-web's own Play/Resume buttons
+    // pass (components/playmenu.js:41-51).
+    //
+    // Passing `items: [item]` instead is deliberately NOT what happens here.
+    // Every item JellyQuest holds arrived from an ApiClient.getItems() list
+    // query (Home, Library, Search) and is therefore partial -- no
+    // MediaSources, no Chapters/Trickplay. `items` hands that partial object
+    // straight to the player: for ordinary video, translateItemsForPlayback
+    // returns the array unchanged (playbackmanager.js:1805). `ids` +
+    // `serverId` makes the player re-fetch the FULL item through
+    // apiClient.getItem() first (getItemsForPlayback,
+    // playbackmanager.js:132). It would not even dodge the server question:
+    // the `items` path reads firstItem.ServerId anyway
+    // (playbackmanager.js:1810).
+    function serverIdFor(item) {
+        // Every BaseItemDto a real server returns carries ServerId. Falling
+        // back to the connected client's own id for one that does not is
+        // jellyfin-web's own pattern -- see
+        // components/remotecontrol/remotecontrol.js:667. serverId() is the
+        // documented ApiClient accessor (src/apiclient.d.ts:270).
+        if (item && item.ServerId) return item.ServerId;
+        var apiClient = window.ApiClient;
+        if (apiClient && typeof apiClient.serverId === 'function') return apiClient.serverId();
+        // Null rather than a guess: play() rejects with 'serverId required!'
+        // and Detail shows that failure, which beats silently doing nothing.
+        return null;
+    }
+
+    // Always hands back a promise -- including when playbackManager is
+    // missing altogether -- so Detail has exactly one rejection path to
+    // render an error from.
+    function requestPlayback(item, options) {
+        try {
+            options.serverId = serverIdFor(item);
+            return Promise.resolve(window.playbackManager.play(options));
+        } catch (error) {
+            return Promise.reject(error);
+        }
+    }
+
     function showDetail(item, returnTo) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
         window.JellyQuestDetailScreen.render(window.JellyQuestShell.getContent(), item, {
             onPlay: function (playItem, startPositionTicks) {
-                window.playbackManager.play({ ids: [playItem.Id], startPositionTicks: startPositionTicks });
+                return requestPlayback(playItem, { ids: [playItem.Id], startPositionTicks: startPositionTicks });
             },
             onPlayTrailer: function (playItem) {
                 var userId = window.ApiClient.getCurrentUserId();
                 return window.ApiClient.getLocalTrailers(userId, playItem.Id).then(function (trailers) {
                     if (!trailers.length) return false;
-                    window.playbackManager.play({ ids: [trailers[0].Id] });
-                    return true;
+                    // The trailer is its own item, so its own ServerId is the
+                    // right one to send.
+                    return requestPlayback(trailers[0], { ids: [trailers[0].Id] }).then(function () {
+                        return true;
+                    });
                 });
             },
         });

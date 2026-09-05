@@ -8,6 +8,16 @@
 
     var TICKS_PER_SECOND = 10000000;
 
+    // Every BaseItemDto a real Jellyfin server returns carries ServerId, and
+    // jellyfin-web's playback path depends on it: playbackManager.play()
+    // needs a serverId to resolve `ids` into items
+    // (playbackmanager.js:2101-2111), and when `items` are passed directly it
+    // reads the id straight off the first item
+    // (translateItemsForPlayback, playbackmanager.js:1810). Fixture items
+    // used to omit it, which is exactly what let a serverId-less play() call
+    // look correct in the simulator.
+    var SERVER_ID = 'dev-server-1';
+
     var USERS = [
         { Id: 'user-alice', Name: 'Alice' },
         { Id: 'user-bob', Name: 'Bob' },
@@ -40,7 +50,7 @@
         { Id: 'movie-8', Name: 'The Long Way Round', ProductionYear: 2018, RunTimeTicks: 7200 * TICKS_PER_SECOND, Overview: 'A road trip that keeps finding reasons not to end.', LocalTrailerCount: 1 },
         { Id: 'movie-9', Name: 'Blue Hour', ProductionYear: 2025, RunTimeTicks: 6000 * TICKS_PER_SECOND, Overview: 'Everything important happens in the twenty minutes after sunset.', LocalTrailerCount: 0 },
         { Id: 'movie-10', Name: 'Open Water', ProductionYear: 2017, RunTimeTicks: 5100 * TICKS_PER_SECOND, Overview: 'A rescue crew’s last call of the season.', LocalTrailerCount: 0 },
-    ].map(function (movie) { return Object.assign({ Type: 'Movie' }, movie); });
+    ].map(function (movie) { return Object.assign({ Type: 'Movie', ServerId: SERVER_ID }, movie); });
 
     // Per-user UserData (playback progress, favorites) -- keyed by user id
     // then item id, matching how real per-profile state works.
@@ -90,6 +100,13 @@
         getCurrentUserId: function () {
             return currentUserId;
         },
+        // Real ApiClient's documented accessor for the connected server's id
+        // (see .cache/jellyfin-web/src/apiclient.d.ts:270); jellyfin-web
+        // itself falls back to it when an item has no ServerId of its own
+        // (components/remotecontrol/remotecontrol.js:667).
+        serverId: function () {
+            return SERVER_ID;
+        },
         getItems: function (userId, options) {
             var items = MOVIES.filter(function (item) { return matchesFilters(item, userId, options); })
                 .map(function (item) { return withUserData(item, userId); });
@@ -105,7 +122,7 @@
         getLocalTrailers: function (userId, itemId) {
             var item = MOVIES.filter(function (entry) { return entry.Id === itemId; })[0];
             if (!item || !item.LocalTrailerCount) return Promise.resolve([]);
-            return Promise.resolve([{ Id: itemId + '-trailer', Name: item.Name + ' - Trailer' }]);
+            return Promise.resolve([{ Id: itemId + '-trailer', Name: item.Name + ' - Trailer', Type: 'Trailer', ServerId: SERVER_ID }]);
         },
         updateFavoriteStatus: function (userId, itemId, isFavorite) {
             USER_DATA[userId] = USER_DATA[userId] || {};

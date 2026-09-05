@@ -14,7 +14,24 @@
     var playingVideo = false;
 
     window.playbackManager = {
+        // Real: playbackmanager.js's self.play (playbackmanager.js:2086).
+        // Its first act after normalizing options is to demand a source for
+        // the queue -- `let { items } = options; if (!items) { if
+        // (!options.serverId) { throw new Error('serverId required!'); } }`
+        // (playbackmanager.js:2101-2105). Callers that pass only `ids` never
+        // reach the player at all.
+        //
+        // That check is enforced here rather than assumed, because this stub
+        // previously accepted ANY options object and resolved -- which let a
+        // caller passing neither `items` nor `serverId` pass the whole e2e
+        // suite while being dead on a real build. play() is declared `async`
+        // upstream, so the throw surfaces to callers as a REJECTION; the
+        // shapes match deliberately.
         play: function (options) {
+            options = options || {};
+            if (!options.items && !options.serverId) {
+                return Promise.reject(new Error('serverId required!'));
+            }
             calls.push(options);
             playingVideo = true;
             return Promise.resolve();

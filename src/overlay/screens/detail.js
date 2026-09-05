@@ -12,7 +12,8 @@
 (function () {
     'use strict';
 
-    // callbacks: { onPlay(item, startTicks), onPlayTrailer(item) -> Promise<boolean> }
+    // callbacks: { onPlay(item, startTicks) -> Promise, onPlayTrailer(item) -> Promise<boolean> }
+    // onPlay rejects when playback could not be started at all.
     // Trailer lookup resolves false when no trailer exists, and rejects on failure.
     function renderDetail(container, item, callbacks) {
         container.innerHTML = '';
@@ -34,13 +35,32 @@
         actions.className = 'jq-row jq-detail-actions';
         container.appendChild(actions);
 
+        // JellyQuest has no player screen of its own -- playback is handed
+        // whole to jellyfin-web -- so a play() that never starts leaves this
+        // screen looking exactly as it did before the press. On a TV with no
+        // console that is indistinguishable from a dead remote, so say so,
+        // the same way the Trailer and My List actions below already do.
+        var playError = document.createElement('p');
+        playError.className = 'jq-detail-error';
+        playError.hidden = true;
+        container.appendChild(playError);
+
+        function requestPlay(startPositionTicks) {
+            playError.hidden = true;
+            Promise.resolve(callbacks.onPlay(item, startPositionTicks)).catch(function (error) {
+                playError.textContent = 'Could not start playback. Try again.';
+                playError.hidden = false;
+                console.error('[JellyQuest] Playback failed:', error);
+            });
+        }
+
         var resumable = item.UserData && item.UserData.PlaybackPositionTicks > 0;
         var playButton = document.createElement('button');
         playButton.className = 'jq-detail-action jq-focusable';
         playButton.setAttribute('data-jq-autofocus', '');
         playButton.textContent = resumable ? 'Resume' : 'Play';
         playButton.addEventListener('click', function () {
-            callbacks.onPlay(item, resumable ? item.UserData.PlaybackPositionTicks : 0);
+            requestPlay(resumable ? item.UserData.PlaybackPositionTicks : 0);
         });
         actions.appendChild(playButton);
 
@@ -48,7 +68,7 @@
             var startOverButton = document.createElement('button');
             startOverButton.className = 'jq-detail-action jq-focusable';
             startOverButton.textContent = 'Start Over';
-            startOverButton.addEventListener('click', function () { callbacks.onPlay(item, 0); });
+            startOverButton.addEventListener('click', function () { requestPlay(0); });
             actions.appendChild(startOverButton);
         }
 
