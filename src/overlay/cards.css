@@ -42,3 +42,39 @@
     height: 100%;
     background: #00a4dc;
 }
+
+/* Keep the existing 220px grid columns and sibling margins. Reserve artwork
+   space before loading so scrolling/focus geometry never shifts on decode. */
+.jq-media-card-poster {
+    height: 410px;
+    padding-top: 346px;
+}
+
+.jq-media-card-episode {
+    height: 204px;
+    padding-top: 140px;
+}
+
+.jq-media-card-image {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 220px;
+    height: 124px;
+    object-fit: contain;
+    border-radius: 8px 8px 0 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.jq-media-card-poster .jq-media-card-image {
+    height: 330px;
+}
+
+.jq-media-card-title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    width: 100%;
+    flex-shrink: 0;
+}

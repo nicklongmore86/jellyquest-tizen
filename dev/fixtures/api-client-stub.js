@@ -40,7 +40,7 @@
         { Id: 'movie-8', Name: 'The Long Way Round', ProductionYear: 2018, RunTimeTicks: 7200 * TICKS_PER_SECOND, Overview: 'A road trip that keeps finding reasons not to end.', LocalTrailerCount: 1 },
         { Id: 'movie-9', Name: 'Blue Hour', ProductionYear: 2025, RunTimeTicks: 6000 * TICKS_PER_SECOND, Overview: 'Everything important happens in the twenty minutes after sunset.', LocalTrailerCount: 0 },
         { Id: 'movie-10', Name: 'Open Water', ProductionYear: 2017, RunTimeTicks: 5100 * TICKS_PER_SECOND, Overview: 'A rescue crew’s last call of the season.', LocalTrailerCount: 0 },
-    ].map(function (movie) { return Object.assign({ Type: 'Movie' }, movie); });
+    ].map(function (movie) { return Object.assign({ Type: 'Movie', ImageTags: movie.Id === 'movie-10' ? {} : { Primary: 'preview-v1' } }, movie); });
 
     // Per-user UserData (playback progress, favorites) -- keyed by user id
     // then item id, matching how real per-profile state works.
@@ -74,6 +74,13 @@
     }
 
     var apiClient = {
+        getImageUrl: function (itemId, options) {
+            var index = (parseInt(itemId.replace('movie-', ''), 10) - 1) % 3 + 1;
+            var query = Object.keys(options).map(function (key) {
+                return encodeURIComponent(key) + '=' + encodeURIComponent(options[key]);
+            }).join('&');
+            return '/dev/fixtures/artwork/poster-' + index + '.webp?' + query;
+        },
         getPublicUsers: function () {
             return Promise.resolve(USERS.slice());
         },
