@@ -165,9 +165,15 @@
     //     computed amount is the entire mechanism here -- `block: 'nearest'`
     //     reveals the minimum, which is precisely the dead-end being fixed.
     //   * The reveal has to be complete before the next key press is
-    //     searched for candidates. Offset assignment is unconditionally
-    //     synchronous; a smooth scroll animates, so the polyfill would run
-    //     its hitTest() against geometry still in motion.
+    //     searched for candidates, or the polyfill runs its hitTest()
+    //     against geometry still in motion. Offset assignment is
+    //     instantaneous GIVEN that no `scroll-behavior: smooth` computes on
+    //     the container -- the setters use the `auto` behavior, which
+    //     honours that property, and under it an assignment animates and an
+    //     immediate read still returns the old offset. Nothing in the
+    //     overlay declares scroll-behavior, so it is instantaneous here;
+    //     that is an invariant to keep, and a narrower one to keep than
+    //     `behavior: 'smooth'`, which opts into animation outright.
     //
     // Containers are `overflow: hidden` rather than auto/scroll: the TV has
     // no pointer, scrollbars would be visible chrome, and the polyfill's

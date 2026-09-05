@@ -90,6 +90,37 @@ function childIds(page, selector) {
         .map((child) => child.getAttribute('data-item-id') || child.className.split(' ').pop()), selector);
 }
 
+// Both preconditions the tall-grid tests rest on, measured off the rendered
+// page rather than taken on trust from what was requested.
+//
+// The card box, because a stylesheet override that quietly loses to
+// cards.css turns these into three copies of the 130px test that pass while
+// proving nothing about the geometry in their own names. And the scroll
+// range against one row's pitch, because a grid that cannot scroll further
+// than a single row cannot strand the return trip no matter how the reveal
+// margin is computed -- it would pass against a build with the bug.
+async function assertMeasuredGeometry(page, cardHeight) {
+    const measured = await page.evaluate(() => {
+        const cards = document.querySelectorAll('.jq-library-grid .jq-media-card');
+        const first = cards[0].getBoundingClientRect();
+        const screen = document.querySelector('.jq-library-screen');
+        return {
+            width: Math.round(first.width),
+            height: Math.round(first.height),
+            // Row pitch straight off the layout: the top-to-top distance
+            // between the first card and the one directly below it.
+            pitch: Math.round(cards[4].getBoundingClientRect().top - first.top),
+            range: screen.scrollHeight - screen.clientHeight,
+        };
+    });
+    assert.deepEqual({ width: measured.width, height: measured.height },
+        { width: 220, height: cardHeight },
+        `cards must actually render at 220x${cardHeight}, not whatever cards.css says`);
+    assert.ok(measured.range > measured.pitch * 4,
+        `the grid must scroll far enough to strand a return trip: `
+        + `${measured.range}px of range against a ${measured.pitch}px row pitch`);
+}
+
 // Leaves the content area for the persistent rail and opens one of its
 // destinations, remote-only: Left into the rail, Up to its top, Down to the
 // item, Enter. The existing specs click the rail button instead; this route
@@ -252,13 +283,25 @@ test('Library: ArrowDown reaches the bottom row of a grid taller than the screen
     }
 });
 
-// The reverse trip over a grid many screens tall. Down was never the hard
-// direction: it settles the cursor near the bottom of the scrollport, which
-// leaves the row above fully revealed for free. Up is the one that strands,
-// and only past the point where the return trip can still reach the top of
-// the container in one step -- so a 7-row grid cannot show it and this one
-// is 25 rows. Card heights cover today's 130px .jq-media-card and the 330px
-// poster and 124px still that card artwork introduces.
+// The reverse trip over a grid deep enough to strand it. Down was never the
+// hard direction: it settles the cursor near the bottom of the scrollport,
+// which leaves the row above fully revealed for free. Up is the one that
+// strands, and what decides whether it can is the container's SCROLL RANGE
+// against one row's pitch -- not its row count. A 7-row grid of 130px cards
+// has 143px of range, less than the 150px pitch, so the return trip has
+// nothing to strand on and it looks fine however broken the margin is; the
+// same 7 rows at 330px have 1543px of range and stranded on card 17. These
+// use 25 rows, which gives 2843px at the shortest card height here.
+//
+// Card heights cover today's 130px .jq-media-card and the 330px poster and
+// 124px still that card artwork introduces. Overriding that height is
+// fiddlier than it looks and got it wrong once: the simulator loads
+// jellyquest.css from a <link> in <body>, AFTER anything addStyleTag() puts
+// in <head>, so an equal-specificity rule loses on document order and
+// silently does nothing -- these cases ran at 130px and reported a clean
+// pass. Hence both a more specific selector, which cannot lose on order,
+// and assertMeasuredGeometry() below, which fails the test if the box it
+// depends on is not the box it asked for.
 for (const cardHeight of [130, 330, 124]) {
     test(`Library: ArrowUp walks a 25-row grid of 220x${cardHeight} cards back to the top`, async () => {
         const browser = await chromium.launch();
@@ -266,9 +309,12 @@ for (const cardHeight of [130, 330, 124]) {
         try {
             const page = await browser.newPage({ viewport });
             await signInAsAlice(page);
-            if (cardHeight !== 130) {
-                await page.addStyleTag({ content: `.jq-media-card { height: ${cardHeight}px; }` });
-            }
+            // Two selectors deep, so it beats cards.css wherever that lands
+            // in document order. Applied at every height, including the
+            // real 130px, so the override path itself is always exercised.
+            await page.addStyleTag({
+                content: `.jq-library-grid .jq-media-card { height: ${cardHeight}px; }`,
+            });
             // Setup only; every move below is a key press. See the note on
             // the 28-item test above for why a taller grid cannot be
             // reached through the UI or produced by any fixture change.
@@ -283,12 +329,7 @@ for (const cardHeight of [130, 330, 124]) {
             });
             await page.waitForSelector('.jq-library-grid .jq-media-card');
 
-            const screenHeight = await page.evaluate(() => {
-                const screen = document.querySelector('.jq-library-screen');
-                return screen.scrollHeight / screen.clientHeight;
-            });
-            assert.ok(screenHeight > 2.5,
-                `the grid must be several screens tall to strand the return trip: ${screenHeight} screens`);
+            await assertMeasuredGeometry(page, cardHeight);
 
             // 100 cards in 4 columns is 25 rows; Down must reach every one.
             const down = await walk(page, 'ArrowDown', viewport);
