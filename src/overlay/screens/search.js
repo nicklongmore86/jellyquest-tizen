@@ -44,7 +44,7 @@
             empty.classList.remove('jq-search-error');
             if (!term.trim()) return;
             var userId = window.ApiClient.getCurrentUserId();
-            window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Series,Episode', SearchTerm: term }).then(function (result) {
+            window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Series,Episode', SearchTerm: term, Limit: 24 }).then(function (result) {
                 if (currentSearchId !== searchId || input.value !== term) return; // a newer search superseded this one
                 empty.hidden = true;
                 empty.textContent = 'No matches.';

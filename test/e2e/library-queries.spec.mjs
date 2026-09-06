@@ -39,7 +39,14 @@ test('fixture models root views, recursive and parent scope, type filters, bound
         assert.ok(result.Items.every(item => item.IsFolder));
     }
     const recursive = await api.getItems('user-alice', { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable' });
-    assert.deepEqual(Array.from(recursive.Items, item => item.Id), ['movie-1', 'episode-516']);
+    assert.deepEqual(Array.from(recursive.Items, item => item.Id), ['movie-1', 'movie-3', 'episode-516']);
+    for (const [direction, expected] of [
+        ['Descending', ['movie-1', 'episode-516', 'movie-3']],
+        ['Ascending', ['movie-3', 'episode-516', 'movie-1']]
+    ]) {
+        const played = await api.getItems('user-alice', { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: direction });
+        assert.deepEqual(Array.from(played.Items, item => item.Id), expected);
+    }
     const children = await api.getItems('user-alice', { ParentId: 'movies', IncludeItemTypes: 'Movie' });
     assert.equal(children.Items.length, 10);
     const descendants = await api.getItems('user-alice', { ParentId: 'shows', Recursive: true, IncludeItemTypes: 'Episode' });
@@ -73,14 +80,15 @@ test('Home and Library use independent media queries and Library reaches beyond 
         };
     });
     await signIn(page);
-    assert.deepEqual(await ids(page, '.jq-home-row-section:first-child .jq-media-card'), ['movie-1', 'episode-516']);
+    assert.deepEqual(await page.evaluate(() => window.__queries[0]), { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' });
+    assert.deepEqual(await ids(page, '.jq-home-row-section:first-child .jq-media-card'), ['movie-1', 'episode-516', 'movie-3']);
     assert.equal(await page.locator('.jq-home-row-section').nth(1).locator('.jq-media-card').count(), 8);
     assert.ok((await ids(page, '.jq-home-row-section:nth-child(2) .jq-media-card')).includes('series-1'));
     await page.locator('.jq-see-all').click();
     await page.waitForSelector('.jq-library-grid .jq-media-card');
     assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), 50);
     assert.deepEqual(await page.evaluate(() => window.__queries), [
-        { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable' },
+        { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' },
         { Recursive: true, IncludeItemTypes: 'Movie,Series', SortBy: 'DateCreated', SortOrder: 'Descending', Limit: 8 },
         { Recursive: true, IncludeItemTypes: 'Movie,Series', SortBy: 'DateCreated', SortOrder: 'Descending', Limit: 50 }
     ]);
@@ -94,6 +102,25 @@ test('Search finds nested Episodes and Series as well as Movies', async () => wi
         await page.waitForSelector(`.jq-search-results [data-item-id="${expected}"]`);
         assert.ok((await ids(page, '.jq-search-results .jq-media-card')).includes(expected));
     }
+}));
+
+test('Search caps its query at 24 remote-reachable results', async () => withPage(async page => {
+    await signIn(page);
+    await page.evaluate(() => {
+        const original = window.ApiClient.getItems;
+        window.__searchQueries = [];
+        window.ApiClient.getItems = function (user, options) {
+            window.__searchQueries.push(options);
+            return original(user, options);
+        };
+    });
+    await page.locator('.jq-nav-search').click();
+    await page.locator('.jq-search-input').fill('Northern');
+    await page.waitForSelector('.jq-search-results .jq-media-card');
+    assert.deepEqual(await page.evaluate(() => window.__searchQueries), [
+        { Recursive: true, IncludeItemTypes: 'Movie,Series,Episode', SearchTerm: 'Northern', Limit: 24 }
+    ]);
+    assert.equal(await page.locator('.jq-search-results .jq-media-card').count(), 24);
 }));
 
 test('Home row order and initial focus survive Recently Added resolving first', async () => withPage(async page => {

@@ -102,8 +102,9 @@
     // then item id, matching how real per-profile state works.
     var USER_DATA = {
         'user-alice': {
-            'episode-516': { PlaybackPositionTicks: 600 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
-            'movie-1': { PlaybackPositionTicks: 40 * 60 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
+            'episode-516': { LastPlayedDate: '2026-09-05T12:00:00Z', PlaybackPositionTicks: 600 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
+            'movie-1': { LastPlayedDate: '2026-09-06T12:00:00Z', PlaybackPositionTicks: 40 * 60 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
+            'movie-3': { LastPlayedDate: '2026-09-04T12:00:00Z', PlaybackPositionTicks: 300 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
             'movie-5': { PlaybackPositionTicks: 0, Played: true, IsFavorite: true },
         },
         'user-bob': {},
@@ -172,7 +173,7 @@
             });
             if (options.Recursive !== undefined && typeof options.Recursive !== 'boolean') throw new Error('Unmodeled Recursive');
             if (options.Filters !== undefined && options.Filters !== 'IsResumable') throw new Error('Unmodeled Filters');
-            if (options.SortBy !== undefined && options.SortBy !== 'DateCreated') throw new Error('Unmodeled SortBy');
+            if (options.SortBy !== undefined && options.SortBy !== 'DateCreated' && options.SortBy !== 'DatePlayed') throw new Error('Unmodeled SortBy');
             if (options.SortOrder !== undefined && options.SortOrder !== 'Ascending' && options.SortOrder !== 'Descending') throw new Error('Unmodeled SortOrder');
             if (options.SortOrder && !options.SortBy) throw new Error('SortOrder requires SortBy');
             if (options.Limit !== undefined && (typeof options.Limit !== 'number' || options.Limit < 0 || options.Limit % 1 !== 0)) throw new Error('Unmodeled Limit');
@@ -200,7 +201,10 @@
             }).map(function (item) { return withUserData(item, userId); });
             var sorted = items.slice();
             if (options.SortBy) sorted.sort(function (a, b) {
-                var order = (a.DateCreated || '').localeCompare(b.DateCreated || '') || a.Id.localeCompare(b.Id);
+                // DatePlayed is per-user history, not the library's creation date.
+                var aDate = options.SortBy === 'DatePlayed' ? a.UserData.LastPlayedDate : a.DateCreated;
+                var bDate = options.SortBy === 'DatePlayed' ? b.UserData.LastPlayedDate : b.DateCreated;
+                var order = (aDate || '').localeCompare(bDate || '') || a.Id.localeCompare(b.Id);
                 return options.SortOrder === 'Descending' ? -order : order;
             });
             var limit = options && options.Limit;

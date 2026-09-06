@@ -13,7 +13,7 @@
         var rows = [
             {
                 title: 'Continue Watching',
-                fetch: function () { return window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable' }); },
+                fetch: function () { return window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' }); },
                 seeAll: false,
             },
             {

@@ -32,8 +32,8 @@ test('shows Continue Watching only for items with saved progress, and Recently A
             Array.from(document.querySelectorAll('.jq-home-row-section')[0].querySelectorAll('.jq-media-card'))
                 .map((c) => c.getAttribute('data-item-id'))
         );
-        // Fixture: a Movie and an Episode have playback progress for Alice.
-        assert.deepEqual(continueWatching, ['movie-1', 'episode-516']);
+        // Fixture: two Movies and an Episode have playback progress for Alice.
+        assert.deepEqual(continueWatching, ['movie-1', 'episode-516', 'movie-3']);
     } finally {
         await browser.close();
     }
