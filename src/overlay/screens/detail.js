@@ -62,12 +62,11 @@
     // without that work.
     var TRACK_SELECTION_ENABLED = false;
 
-    // callbacks: { onPlay(item, startTicks) -> Promise, onPlayTrailer(item) -> Promise<boolean> }
-    // onPlay rejects when playback could not be started at all.
-    // Trailer playback resolves true when it started, resolves false when
-    // there was nothing to play, and rejects on failure -- note that
-    // jellyfin-web's own playTrailers() rejects with NO argument
-    // (playbackmanager.js:3924), so nothing here may dereference it.
+    // callbacks: { onPlay(item, startTicks) -> Promise, onPlayTrailer(item) -> Promise }
+    // Both reject when the request could not be carried out. Neither
+    // rejection may be dereferenced: jellyfin-web rejects with NO argument in
+    // nine places in the pinned build, several of them reachable through
+    // these two calls (see app.js's onPlayTrailer).
     function renderDetail(container, item, callbacks) {
         container.innerHTML = '';
         container.className = 'jq-detail-screen';
@@ -233,15 +232,21 @@
                 // The FULL item is what goes to playback: playTrailers()
                 // reads LocalTrailerCount and ServerId off it, and the list
                 // item carries neither.
-                Promise.resolve(callbacks.onPlayTrailer(full)).then(function (played) {
-                    if (played) return;
-                    trailerStatus.textContent = 'No trailer available.';
+                // ONE message, and it deliberately does not name a cause.
+                // This used to show "No trailer available." for a bare
+                // rejection and a failure message otherwise, on the reading
+                // that playbackmanager.js:3924 uniquely means "nothing to
+                // play". MEASURED: it does not. The pinned build rejects with
+                // no argument in nine places, and playInternal() alone
+                // reaches two of them from inside this call
+                // (PlaybackErrorPlaceHolder at playbackmanager.js:2348-2351,
+                // NO_MEDIA_ERROR at 2301-2302). A confident cause we cannot
+                // substantiate is worse on a TV than an honest one we can.
+                Promise.resolve(callbacks.onPlayTrailer(full)).catch(function (error) {
+                    trailerStatus.textContent = 'Could not play the trailer. Try again.';
                     trailerStatus.hidden = false;
-                }).catch(function (error) {
-                    trailerStatus.textContent = 'Could not load trailer. Try again.';
-                    trailerStatus.hidden = false;
-                    // playTrailers() rejects with no argument at
-                    // playbackmanager.js:3924 -- log it, never read it.
+                    // Logged, never read: the rejection value is routinely
+                    // undefined.
                     console.error('[JellyQuest] Trailer playback failed:', error);
                 });
             });

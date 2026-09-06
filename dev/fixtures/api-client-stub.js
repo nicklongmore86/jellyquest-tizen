@@ -32,6 +32,13 @@
         {
             Id: 'movie-1', Name: 'The Long Winter', ProductionYear: 2024, RunTimeTicks: 2 * 3600 * TICKS_PER_SECOND,
             Overview: 'A supply run north turns into a fight to get home before the roads close for good.', LocalTrailerCount: 1,
+            // BOTH a local trailer and a remote one, which real servers do.
+            // This is the hazardous shape: upstream playTrailers() falls back
+            // to RemoteTrailers whenever the LOCAL LOOKUP is empty, so a
+            // stale LocalTrailerCount on an item like this is what would
+            // launch the YouTube embed. It lives in the fixture rather than
+            // in one test's setup so the hazard is permanently present.
+            RemoteTrailers: [{ Url: 'https://www.youtube.com/watch?v=dev-long-winter', Name: 'The Long Winter - Official Trailer' }],
             // The only fixture item with multiple tracks -- exercises the
             // conditionally-shown More/Playback Options menu.
             MediaStreams: [

@@ -289,8 +289,14 @@ for (const screen of ['Requests', 'library']) {
     });
 }
 
+// These two used to assert DIFFERENT messages for the two rejection shapes.
+// They do not any more: a bare `Promise.reject()` is not a unique signal for
+// "no trailer" in the pinned build (nine such sites; see app.js's
+// onPlayTrailer), so both now reach one message that names no cause. Both
+// shapes are still exercised, because what still has to hold is that neither
+// is dereferenced and both recover.
 for (const outcome of ['rejected', 'empty']) {
-    test(`Trailer lookup ${outcome} shows a distinct message`, async () => {
+    test(`Trailer ${outcome} shows a message that names no cause, and recovers`, async () => {
         const browser = await chromium.launch();
         try {
             const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
@@ -299,10 +305,11 @@ for (const outcome of ['rejected', 'empty']) {
             await page.waitForSelector('.jq-card');
             // Trailer activation now goes through playbackManager.playTrailers()
             // rather than ApiClient.getLocalTrailers() + play() (see app.js's
-            // onPlayTrailer). Its two rejection shapes are what produce the
-            // two distinct messages: a real error, and the bare
-            // `Promise.reject()` of playbackmanager.js:3924, which means
-            // "nothing to play" rather than "something went wrong".
+            // onPlayTrailer). Both of its rejection shapes are exercised here
+            // -- a real error, and the bare `Promise.reject()` of
+            // playbackmanager.js:3924 -- and both must reach the same
+            // message, because nothing in the pinned upstream tells them
+            // apart.
             await page.evaluate((outcome) => {
                 window.__realPlayTrailers = window.playbackManager.playTrailers;
                 window.playbackManager.playTrailers = () => outcome === 'rejected'
@@ -312,7 +319,7 @@ for (const outcome of ['rejected', 'empty']) {
             const trailer = page.getByRole('button', { name: 'Trailer', exact: true });
             await trailer.waitFor(); // Detail fetches the full item before it can offer this
             await trailer.click();
-            const message = page.getByText(outcome === 'rejected' ? 'Could not load trailer. Try again.' : 'No trailer available.', { exact: true });
+            const message = page.getByText('Could not play the trailer. Try again.', { exact: true });
             await message.waitFor({ state: 'visible', timeout: 2000 });
             await assertPainted(message);
             await page.evaluate(() => {

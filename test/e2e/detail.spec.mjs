@@ -216,13 +216,20 @@ test('a late response for a superseded render is discarded, even when it is the 
         assert.equal(await page.locator('.jq-detail-overview').count(), 1);
         assert.deepEqual(await actionLabels(page), ['Resume', 'Start Over', 'Trailer', 'Add to My List']);
 
-        // And it must be DISCARDED, not applied-and-then-caught. Without the
-        // guard the stale handler still runs: its insertBefore() targets a
-        // node the second render detached, throws, and lands in the failure
-        // path -- which on a slower day paints "Could not load details" over
-        // a screen that loaded perfectly well. Nothing about the container
-        // distinguishes the two renders, so this is what the node-identity
-        // check buys.
+        // And it must be DISCARDED, not applied-and-then-caught.
+        //
+        // Be precise about what the guard buys, because it is less dramatic
+        // than it looks: the stale render's own nodes are all detached, so a
+        // stale response CANNOT paint a wrong synopsis, button or error over
+        // the live screen -- that was probed across both completion orders
+        // and never happened. What it does prevent is (1) the stale
+        // insertBefore() throwing against a node the second render detached,
+        // which is what this assertion catches, and (2) a stray hidden status
+        // paragraph being appended to the still-live container when the stale
+        // item has trailers but no overview, which this fixture cannot reach
+        // because movie-1 has both. Nothing about the container distinguishes
+        // the two renders, so a node this render created is the only signal
+        // available.
         assert.deepEqual(consoleErrors, [], 'a superseded response must not reach the DOM or the failure path');
         assert.equal(await page.locator('.jq-detail-enrich-error').evaluate((element) => element.hidden), true);
     } finally {
@@ -446,11 +453,14 @@ test('Trailer plays the local trailer item, not the movie itself', async () => {
     }
 });
 
-// playTrailers() has two distinct rejections and Detail must tell them apart:
-// playbackmanager.js:3924 rejects with NO ARGUMENT when there was nothing to
-// play, while a real failure rejects with an error. A handler that
-// dereferences the rejection value throws instead of painting either.
-test('the two trailer rejections show different messages, and the empty one is survivable', async () => {
+// Both of playTrailers()'s rejection shapes reach the SAME message, and that
+// is the point. A bare `Promise.reject()` was read as "nothing to play"
+// (playbackmanager.js:3924) -- but the pinned build rejects with no argument
+// in nine places, two of them reachable from inside this very call
+// (PlaybackErrorPlaceHolder at 2348-2351, NO_MEDIA_ERROR at 2301-2302), so
+// `undefined` does not identify a cause. What the code must still do is
+// survive it: neither shape may be dereferenced.
+test('both trailer rejection shapes show one honest message and neither is dereferenced', async () => {
     const browser = await chromium.launch();
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
@@ -459,19 +469,66 @@ test('the two trailer rejections show different messages, and the empty one is s
         await openDetail(page, 'movie-1');
         await button(page, 'Trailer').waitFor();
 
-        await page.evaluate(() => { window.playbackManager.playTrailers = () => Promise.reject(); });
-        await button(page, 'Trailer').click();
-        const empty = page.getByText('No trailer available.', { exact: true });
-        await empty.waitFor({ state: 'visible', timeout: 2000 });
-        await assertPainted(empty);
-
-        await page.evaluate(() => { window.playbackManager.playTrailers = () => Promise.reject(new Error('Offline')); });
-        await button(page, 'Trailer').click();
-        const failed = page.getByText('Could not load trailer. Try again.', { exact: true });
-        await failed.waitFor({ state: 'visible', timeout: 2000 });
-        await assertPainted(failed);
+        const message = page.getByText('Could not play the trailer. Try again.', { exact: true });
+        for (const rejection of ['bare', 'error']) {
+            await page.evaluate((shape) => {
+                document.querySelectorAll('.jq-detail-error').forEach((element) => { element.hidden = true; });
+                window.playbackManager.playTrailers = () => (shape === 'bare'
+                    ? Promise.reject() : Promise.reject(new Error('Offline')));
+            }, rejection);
+            await button(page, 'Trailer').click();
+            await message.waitFor({ state: 'visible', timeout: 2000 });
+            await assertPainted(message);
+        }
 
         assert.deepEqual(pageErrors, [], 'reading a bare rejection would throw inside the click handler');
+    } finally {
+        await browser.close();
+    }
+});
+
+// The local-only gate is a decision about what JellyQuest OFFERS. Making it a
+// decision about what actually PLAYS is a separate thing, and handing the
+// full item to upstream playTrailers() does not achieve it: MEASURED at
+// playbackmanager.js:3903-3916, the remote fallback runs whenever the LOCAL
+// LOOKUP is empty (`if (!items?.length)`), not when LocalTrailerCount is
+// zero. movie-1 carries both a local trailer and a RemoteTrailers entry --
+// the shape a real server returns -- so an empty local lookup here is a stale
+// LocalTrailerCount, and reaching the remote path would launch the YouTube
+// embed on a file:// origin behind an opaque overlay.
+test('a stale LocalTrailerCount never falls through to a remote trailer', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openDetail(page, 'movie-1');
+        await button(page, 'Trailer').waitFor();
+
+        // The item really does carry a remote trailer: there IS something for
+        // the fallback to reach, so this is not passing by absence of data.
+        const full = await page.evaluate(() => window.ApiClient.getItem(window.ApiClient.getCurrentUserId(), 'movie-1'));
+        assert.equal(full.LocalTrailerCount, 1);
+        assert.equal(full.RemoteTrailers.length, 1);
+
+        // The local lookup comes back empty -- a removed trailer, or a count
+        // the server has not caught up with.
+        await page.evaluate(() => {
+            window.ApiClient.getLocalTrailers = () => Promise.resolve([]);
+            window.playbackManager.__calls.length = 0;
+        });
+        await button(page, 'Trailer').click();
+
+        // Settle on whichever happened -- a playback call or the failure
+        // message -- so the assertion below reports what was PLAYED rather
+        // than timing out waiting for a message that never comes.
+        await page.waitForFunction(() => window.playbackManager.__calls.length > 0
+            || Array.from(document.querySelectorAll('.jq-detail-error')).some((element) => !element.hidden));
+
+        // No playback at all, and certainly not of an Id-less remote item.
+        assert.deepEqual(await page.evaluate(() => window.playbackManager.__calls), [],
+            'a stale local count must not reach the remote trailer path');
+        const message = page.getByText('Could not play the trailer. Try again.', { exact: true });
+        await message.waitFor({ state: 'visible', timeout: 2000 });
+        await assertPainted(message);
     } finally {
         await browser.close();
     }

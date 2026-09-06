@@ -22,7 +22,18 @@ Why: jellyfin-web plays a remote trailer *in-app* through a YouTube IFrame embed
 
 A button that probably does nothing visible is worse on a TV than no button, so the narrower gate stands until someone can measure the embed on real hardware. Do not widen it back to the upstream condition on inference alone.
 
-Trailer activation goes through `playbackManager.playTrailers(item)`, guarded by `typeof`. Under a local-only gate that always takes the `getLocalTrailers` branch, which hands real trailer items to `play()` — it never constructs the Id-less pseudo-item the playback guard would refuse. Note that `playTrailers()` rejects with **no** argument (`playbackmanager.js:3924`), so nothing may dereference the rejection value.
+Trailer activation goes through `playbackManager.playTrailers(item)`, guarded by `typeof` — on an item with `RemoteTrailers` **removed**.
+
+That stripping is load-bearing, and an earlier version of this document was wrong to imply the gate alone was enough. MEASURED in the pinned build (`playbackmanager.js:3903-3916`), `playTrailers()` falls back to remote trailers whenever the **local lookup returns empty**, not when `LocalTrailerCount` is zero:
+
+```js
+if (item.LocalTrailerCount) { items = await apiClient.getLocalTrailers(...); }
+if (!items?.length) { items = (item.RemoteTrailers || []).map(...); }
+```
+
+So a film with a stale `LocalTrailerCount`, or whose local trailer has been removed, would silently launch the YouTube embed despite the gate. Handing over an item with no `RemoteTrailers` removes the fallback's only source of remote URLs, so the guarantee comes from the input rather than from a branch nobody can re-verify on the hardware.
+
+`playTrailers()` rejects with **no** argument (`playbackmanager.js:3924`), so nothing may dereference the rejection value — and a bare rejection must not be read as "no trailer available" either. The pinned build has nine bare `Promise.reject()` sites, two of them reachable from inside this call (`PlaybackErrorPlaceHolder` at `2348-2351`, `NO_MEDIA_ERROR` at `2301-2302`), so nothing distinguishes "there was no trailer" from "playing it failed". JellyQuest shows one message that names no cause.
 
 The full item (not the list item) is what reaches `playTrailers()`: `LocalTrailerCount` and `ServerId` are read off it, and list responses carry neither `LocalTrailerCount` nor a trailer count of any kind.
 

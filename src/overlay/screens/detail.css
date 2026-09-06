@@ -19,10 +19,23 @@
    action row and every error paragraph stay on screen at any font size and
    any synopsis length. Deliberately `overflow-y: auto` rather than a fixed
    line clamp: the bound then follows whatever room actually remains instead
-   of a guessed line count. The overview is NOT focusable and the TV has no
-   pointer, so a very long synopsis is still visually truncated in practice
-   -- making it walkable with the remote is follow-up work, not a reason to
-   leave Play off the bottom of the screen. */
+   of a guessed line count.
+
+   The overview is NOT focusable and the TV has no pointer, so a synopsis
+   longer than the space left is visually truncated: MEASURED at 1920x1080
+   with a 27px root, roughly 954 characters are fully readable, or 851 with
+   an error line also on screen; a 1,500-character synopsis loses about
+   36-43% of its text. Whether that bites in practice is UNKNOWN -- it has
+   not been established that household synopses are typically short enough,
+   and the only real sample measured was 103 characters.
+
+   Making it scrollable is deliberately NOT done here: it needs its own
+   design (how a non-control advertises that it scrolls, and how the remote
+   drives it), which is follow-up work. It is NOT a focus-order problem --
+   focus.js's focusInto() prioritises [data-jq-autofocus] over
+   firstFocusable(), so a tabindex here would not take initial focus from
+   Play. Either way, an unreadable tail is a smaller failure than an
+   unreachable Play button, which is what this rule exists to prevent. */
 .jq-detail-screen {
     padding: 48px;
     box-sizing: border-box;
