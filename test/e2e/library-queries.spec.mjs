@@ -94,14 +94,17 @@ test('Home and Library use independent media queries and Library reaches beyond 
     ]);
 }));
 
-test('Search finds nested Episodes and Series as well as Movies', async () => withPage(async page => {
+test('Search finds Series and Movies but excludes Episodes', async () => withPage(async page => {
     await signIn(page);
     await page.locator('.jq-nav-search').click();
-    for (const [term, expected] of [['Northern Journey 516', 'episode-516'], ['Northern Stories 1', 'series-1'], ['Blue Hour', 'movie-9']]) {
+    for (const [term, expected] of [['Northern Stories 1', 'series-1'], ['Blue Hour', 'movie-9']]) {
         await page.locator('.jq-search-input').fill(term);
         await page.waitForSelector(`.jq-search-results [data-item-id="${expected}"]`);
         assert.ok((await ids(page, '.jq-search-results .jq-media-card')).includes(expected));
     }
+    await page.locator('.jq-search-input').fill('Northern Journey 516');
+    await page.getByText('No matches.', { exact: true }).waitFor();
+    assert.equal(await page.locator('.jq-search-results .jq-media-card').count(), 0);
 }));
 
 test('Search caps its query at 24 remote-reachable results', async () => withPage(async page => {
@@ -118,9 +121,66 @@ test('Search caps its query at 24 remote-reachable results', async () => withPag
     await page.locator('.jq-search-input').fill('Northern');
     await page.waitForSelector('.jq-search-results .jq-media-card');
     assert.deepEqual(await page.evaluate(() => window.__searchQueries), [
-        { Recursive: true, IncludeItemTypes: 'Movie,Series,Episode', SearchTerm: 'Northern', Limit: 24 }
+        { Recursive: true, IncludeItemTypes: 'Movie,Series', SearchTerm: 'Northern', Limit: 24 }
     ]);
     assert.equal(await page.locator('.jq-search-results .jq-media-card').count(), 24);
+}));
+
+test('Search excludes episode crowding so a matching Movie is visible within the cap', async () => withPage(async page => {
+    await signIn(page);
+    const crowded = await page.evaluate(async () => {
+        const options = { Recursive: true, IncludeItemTypes: 'Movie,Series,Episode', SearchTerm: 'Quiet Signal', Limit: 24 };
+        const withEpisodes = await window.ApiClient.getItems('user-alice', options);
+        const withoutEpisodes = await window.ApiClient.getItems('user-alice', { ...options, IncludeItemTypes: 'Movie,Series' });
+        return { withEpisodes, withoutEpisodes };
+    });
+    assert.equal(crowded.withEpisodes.TotalRecordCount, 31);
+    assert.equal(crowded.withEpisodes.Items.length, 24);
+    assert.ok(crowded.withEpisodes.Items.every(item => item.Type === 'Episode'));
+    assert.deepEqual(crowded.withoutEpisodes.Items.map(item => item.Id), ['movie-2']);
+    await page.locator('.jq-nav-search').click();
+    await page.locator('.jq-search-input').fill('Quiet Signal');
+    await page.waitForSelector('.jq-search-results .jq-media-card');
+    assert.deepEqual(await ids(page, '.jq-search-results .jq-media-card'), ['movie-2']);
+}));
+
+test('Search paints truncation in its existing message and clears it for a narrower search', async () => withPage(async page => {
+    await signIn(page);
+    await page.locator('.jq-nav-search').click();
+    await page.locator('.jq-search-input').fill('Northern');
+    await page.waitForSelector('.jq-search-results .jq-media-card');
+    const message = page.locator('.jq-search-empty');
+    assert.equal(await message.textContent(), 'Showing the first 24 of 44 matches — try a more specific title.');
+    await assertPainted(message);
+    assert.equal(await message.evaluate(element => element.classList.contains('jq-search-error')), false);
+    await page.locator('.jq-search-input').fill('Blue Hour');
+    await page.waitForSelector('.jq-search-results [data-item-id="movie-9"]');
+    assert.equal(await message.evaluate(element => element.hidden), true);
+}));
+
+test('Search omits truncation when TotalRecordCount is absent or not greater than the returned count', async () => withPage(async page => {
+    await signIn(page);
+    await page.evaluate(() => {
+        const original = window.ApiClient.getItems;
+        window.__countMode = 'absent';
+        window.__searchDone = 0;
+        window.ApiClient.getItems = async function (user, options) {
+            const result = await original(user, options);
+            if (window.__countMode === 'absent') delete result.TotalRecordCount;
+            else result.TotalRecordCount = result.Items.length - (window.__countMode === 'less' ? 1 : 0);
+            window.__searchDone++;
+            return result;
+        };
+    });
+    await page.locator('.jq-nav-search').click();
+    for (const [index, mode] of ['absent', 'equal', 'less'].entries()) {
+        await page.evaluate(mode => { window.__countMode = mode; }, mode);
+        await page.locator('.jq-search-input').fill('');
+        await page.locator('.jq-search-input').fill('Northern');
+        await page.waitForFunction(count => window.__searchDone === count, index + 1);
+        assert.equal(await page.locator('.jq-search-results .jq-media-card').count(), 24);
+        assert.equal(await page.locator('.jq-search-empty').evaluate(element => element.hidden), true);
+    }
 }));
 
 test('Home row order and initial focus survive Recently Added resolving first', async () => withPage(async page => {

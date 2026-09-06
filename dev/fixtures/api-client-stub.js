@@ -90,7 +90,7 @@
     }
     // 515/700 Primary (73.6%); 699/700 parent backdrops (99.86%).
     for (i = 1; i <= 700; i++) {
-        MEDIA.push({ Id: 'episode-' + i, Name: 'Northern Journey ' + i, Type: 'Episode',
+        MEDIA.push({ Id: 'episode-' + i, Name: (i <= 30 ? 'Quiet Signal Episode ' : 'Northern Journey ') + i, Type: 'Episode',
             IsFolder: false, ParentId: 'season-1', SeriesId: 'series-1', SeriesName: 'Northern Stories 1',
             ParentIndexNumber: 1, IndexNumber: i, ServerId: SERVER_ID,
             RunTimeTicks: 2700 * TICKS_PER_SECOND,
@@ -186,6 +186,12 @@
             if (options.ParentId !== undefined && !all.some(function (item) { return item.Id === options.ParentId && item.IsFolder; })) throw new Error('Unmodeled ParentId');
             var scoped = options.Recursive || options.ParentId;
             var candidates = scoped ? MEDIA : FOLDERS;
+            // Reproduce measured search crowding: episodes can precede films.
+            // Thirty Quiet Signal episodes bury the matching movie past 24.
+            if (scoped && options.SearchTerm) {
+                candidates = candidates.filter(function (item) { return item.Type === 'Episode'; })
+                    .concat(candidates.filter(function (item) { return item.Type !== 'Episode'; }));
+            }
             var items = candidates.filter(function (item) {
                 if (types && types.indexOf(item.Type) === -1) return false;
                 if (options.ParentId) {
