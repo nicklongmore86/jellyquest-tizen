@@ -54,15 +54,57 @@
         return Object.assign({
             Type: 'Movie',
             ServerId: SERVER_ID,
-            ImageTags: movie.Id === 'movie-10' ? {} : { Primary: 'preview-v1' },
+            ImageTags: { Primary: 'preview-v1' },
+            IsFolder: false,
+            ParentId: 'movies',
+            DateCreated: '2026-08-' + ('0' + movie.Id.split('-')[1]).slice(-2) + 'T00:00:00Z',
         }, movie);
     });
+
+    // Root views reproduce the measured unscoped /Users/{id}/Items response.
+    var FOLDERS = [
+        { Id: 'collections', Name: 'Collections', Type: 'CollectionFolder', CollectionType: 'boxsets' },
+        { Id: 'movies', Name: 'Movies', Type: 'CollectionFolder', CollectionType: 'movies' },
+        { Id: 'shows', Name: 'Shows', Type: 'CollectionFolder', CollectionType: 'tvshows' },
+        { Id: 'sports', Name: 'Sports', Type: 'CollectionFolder', CollectionType: 'tvshows' },
+        { Id: 'playlists', Name: 'Playlists', Type: 'ManualPlaylistsFolder', CollectionType: 'playlists' },
+    ].map(function (item) {
+        return Object.assign({ IsFolder: true, ServerId: SERVER_ID, ImageTags: {} }, item);
+    });
+
+    var MEDIA = MOVIES.slice();
+    // 54 Movie/Series entries exceed both Home's 8 and Library's 50 cap.
+    // Generated dates keep movie-10 newest, with a Series beside it.
+    var i;
+    for (i = 1; i <= 44; i++) {
+        MEDIA.push({ Id: 'series-' + i, Name: 'Northern Stories ' + i, Type: 'Series',
+            IsFolder: true, ParentId: 'shows', ServerId: SERVER_ID,
+            ImageTags: { Primary: 'preview-v1' },
+            DateCreated: i === 1 ? '2026-08-09T12:00:00Z' : '2025-01-01T00:00:00Z' });
+    }
+    // 33/37 seasons have Primary (89.2% rounded).
+    for (i = 1; i <= 37; i++) {
+        MEDIA.push({ Id: 'season-' + i, Name: 'Season ' + i, Type: 'Season',
+            IsFolder: true, ParentId: 'series-1', SeriesId: 'series-1', SeriesName: 'Northern Stories 1',
+            IndexNumber: i, ServerId: SERVER_ID, ImageTags: i <= 33 ? { Primary: 'preview-v1' } : {} });
+    }
+    // 515/700 Primary (73.6%); 699/700 parent backdrops (99.86%).
+    for (i = 1; i <= 700; i++) {
+        MEDIA.push({ Id: 'episode-' + i, Name: (i <= 30 ? 'Quiet Signal Episode ' : 'Northern Journey ') + i, Type: 'Episode',
+            IsFolder: false, ParentId: 'season-1', SeriesId: 'series-1', SeriesName: 'Northern Stories 1',
+            ParentIndexNumber: 1, IndexNumber: i, ServerId: SERVER_ID,
+            RunTimeTicks: 2700 * TICKS_PER_SECOND,
+            ImageTags: i <= 515 ? { Primary: 'preview-v1' } : {},
+            ParentBackdropItemId: 'series-1', ParentBackdropImageTags: i < 700 ? ['backdrop-v1'] : [] });
+    }
 
     // Per-user UserData (playback progress, favorites) -- keyed by user id
     // then item id, matching how real per-profile state works.
     var USER_DATA = {
         'user-alice': {
-            'movie-1': { PlaybackPositionTicks: 40 * 60 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
+            'episode-516': { LastPlayedDate: '2026-09-05T12:00:00Z', PlaybackPositionTicks: 600 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
+            'movie-1': { LastPlayedDate: '2026-09-06T12:00:00Z', PlaybackPositionTicks: 40 * 60 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
+            'movie-3': { LastPlayedDate: '2026-09-04T12:00:00Z', PlaybackPositionTicks: 300 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
             'movie-5': { PlaybackPositionTicks: 0, Played: true, IsFavorite: true },
         },
         'user-bob': {},
@@ -124,19 +166,63 @@
             return SERVER_ID;
         },
         getItems: function (userId, options) {
-            var items = MOVIES.filter(function (item) { return matchesFilters(item, userId, options); })
-                .map(function (item) { return withUserData(item, userId); });
-            var sorted = (options && options.SortBy === 'DateCreated') ? items.slice().reverse() : items;
+            options = options || {};
+            var modeled = ['Recursive', 'ParentId', 'IncludeItemTypes', 'Filters', 'SearchTerm', 'SortBy', 'SortOrder', 'Limit'];
+            Object.keys(options).forEach(function (key) {
+                if (modeled.indexOf(key) === -1) throw new Error('Unmodeled getItems option: ' + key);
+            });
+            if (options.Recursive !== undefined && typeof options.Recursive !== 'boolean') throw new Error('Unmodeled Recursive');
+            if (options.Filters !== undefined && options.Filters !== 'IsResumable') throw new Error('Unmodeled Filters');
+            if (options.SortBy !== undefined && options.SortBy !== 'DateCreated' && options.SortBy !== 'DatePlayed') throw new Error('Unmodeled SortBy');
+            if (options.SortOrder !== undefined && options.SortOrder !== 'Ascending' && options.SortOrder !== 'Descending') throw new Error('Unmodeled SortOrder');
+            if (options.SortOrder && !options.SortBy) throw new Error('SortOrder requires SortBy');
+            if (options.Limit !== undefined && (typeof options.Limit !== 'number' || options.Limit < 0 || options.Limit % 1 !== 0)) throw new Error('Unmodeled Limit');
+            if (options.SearchTerm !== undefined && typeof options.SearchTerm !== 'string') throw new Error('Unmodeled SearchTerm');
+            var types = options.IncludeItemTypes === undefined ? null : options.IncludeItemTypes.split(',');
+            if (types) types.forEach(function (type) {
+                if (['Movie', 'Series', 'Season', 'Episode', 'CollectionFolder', 'ManualPlaylistsFolder'].indexOf(type) === -1) throw new Error('Unmodeled IncludeItemTypes: ' + type);
+            });
+            var all = FOLDERS.concat(MEDIA);
+            if (options.ParentId !== undefined && !all.some(function (item) { return item.Id === options.ParentId && item.IsFolder; })) throw new Error('Unmodeled ParentId');
+            var scoped = options.Recursive || options.ParentId;
+            var candidates = scoped ? MEDIA : FOLDERS;
+            // Reproduce measured search crowding: episodes can precede films.
+            // Thirty Quiet Signal episodes bury the matching movie past 24.
+            if (scoped && options.SearchTerm) {
+                candidates = candidates.filter(function (item) { return item.Type === 'Episode'; })
+                    .concat(candidates.filter(function (item) { return item.Type !== 'Episode'; }));
+            }
+            var items = candidates.filter(function (item) {
+                if (types && types.indexOf(item.Type) === -1) return false;
+                if (options.ParentId) {
+                    var parentId = item.ParentId;
+                    while (parentId && parentId !== options.ParentId && options.Recursive) {
+                        var parent = all.filter(function (entry) { return entry.Id === parentId; })[0];
+                        parentId = parent && parent.ParentId;
+                    }
+                    if (parentId !== options.ParentId) return false;
+                }
+                // The measured root response ignores IsResumable and returns views.
+                return matchesFilters(item, userId, scoped ? options : { SearchTerm: options.SearchTerm });
+            }).map(function (item) { return withUserData(item, userId); });
+            var sorted = items.slice();
+            if (options.SortBy) sorted.sort(function (a, b) {
+                // DatePlayed is per-user history, not the library's creation date.
+                var aDate = options.SortBy === 'DatePlayed' ? a.UserData.LastPlayedDate : a.DateCreated;
+                var bDate = options.SortBy === 'DatePlayed' ? b.UserData.LastPlayedDate : b.DateCreated;
+                var order = (aDate || '').localeCompare(bDate || '') || a.Id.localeCompare(b.Id);
+                return options.SortOrder === 'Descending' ? -order : order;
+            });
             var limit = options && options.Limit;
             var page = typeof limit === 'number' ? sorted.slice(0, limit) : sorted;
             return Promise.resolve({ Items: page, TotalRecordCount: sorted.length });
         },
         getItem: function (userId, itemId) {
-            var item = MOVIES.filter(function (entry) { return entry.Id === itemId; })[0];
+            var item = FOLDERS.concat(MEDIA).filter(function (entry) { return entry.Id === itemId; })[0];
             return item ? Promise.resolve(withUserData(item, userId)) : Promise.reject(new Error('item not found'));
         },
         getLocalTrailers: function (userId, itemId) {
-            var item = MOVIES.filter(function (entry) { return entry.Id === itemId; })[0];
+            var item = FOLDERS.concat(MEDIA).filter(function (entry) { return entry.Id === itemId; })[0];
             if (!item || !item.LocalTrailerCount) return Promise.resolve([]);
             return Promise.resolve([{ Id: itemId + '-trailer', Name: item.Name + ' - Trailer', Type: 'Trailer', ServerId: SERVER_ID }]);
         },

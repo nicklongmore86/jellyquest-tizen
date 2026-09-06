@@ -24,7 +24,7 @@
 
         var empty = document.createElement('p');
         empty.className = 'jq-search-empty';
-        empty.textContent = 'No matches.';
+        empty.textContent = 'No films or shows match. Episode search isn’t available yet.';
         empty.hidden = true;
         container.appendChild(empty);
 
@@ -40,18 +40,22 @@
             var currentSearchId = searchId;
             resultsRow.innerHTML = '';
             empty.hidden = true;
-            empty.textContent = 'No matches.';
+            empty.textContent = 'No films or shows match. Episode search isn’t available yet.';
             empty.classList.remove('jq-search-error');
             if (!term.trim()) return;
             var userId = window.ApiClient.getCurrentUserId();
-            window.ApiClient.getItems(userId, { SearchTerm: term }).then(function (result) {
+            window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Series', SearchTerm: term, Limit: 24 }).then(function (result) {
                 if (currentSearchId !== searchId || input.value !== term) return; // a newer search superseded this one
                 empty.hidden = true;
-                empty.textContent = 'No matches.';
+                empty.textContent = 'No films or shows match. Episode search isn’t available yet.';
                 empty.classList.remove('jq-search-error');
                 if (!result.Items.length) {
                     empty.hidden = false;
                     return;
+                }
+                if (typeof result.TotalRecordCount === 'number' && result.TotalRecordCount > result.Items.length) {
+                    empty.textContent = 'Showing the first ' + result.Items.length + ' of ' + result.TotalRecordCount + ' matches — try a more specific title.';
+                    empty.hidden = false;
                 }
                 result.Items.forEach(function (item) {
                     resultsRow.appendChild(window.JellyQuestCards.createCard(item, {

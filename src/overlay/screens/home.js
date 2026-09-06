@@ -4,7 +4,7 @@
     'use strict';
 
     // callbacks: { onSelectItem(item), onSeeAll(row) } where row is
-    // { title, fetch: () => Promise<{Items}> } for the Library screen.
+    // { title } for the Library screen, which owns its query.
     function renderHome(container, callbacks) {
         container.innerHTML = '';
         container.className = 'jq-home-screen';
@@ -13,12 +13,12 @@
         var rows = [
             {
                 title: 'Continue Watching',
-                fetch: function () { return window.ApiClient.getItems(userId, { Filters: 'IsResumable' }); },
+                fetch: function () { return window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' }); },
                 seeAll: false,
             },
             {
                 title: 'Recently Added',
-                fetch: function () { return window.ApiClient.getItems(userId, { SortBy: 'DateCreated', Limit: 8 }); },
+                fetch: function () { return window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Series', SortBy: 'DateCreated', SortOrder: 'Descending', Limit: 8 }); },
                 seeAll: true,
             },
         ];
@@ -26,20 +26,24 @@
         var firstCard = null;
         var pending = rows.map(function (row) {
             return row.fetch().then(function (result) {
-                if (!result.Items.length) return;
-                var section = renderRow(row, result.Items, callbacks);
-                container.appendChild(section);
-                if (!firstCard) firstCard = section.querySelector('.jq-focusable');
+                if (!result.Items.length) return null;
+                return renderRow(row, result.Items, callbacks);
             }).catch(function (error) {
                 var status = document.createElement('p');
                 status.className = 'jq-home-empty';
                 status.textContent = row.title + ' is unavailable right now.';
-                container.appendChild(status);
                 console.error('[JellyQuest] Home row failed:', error);
+                return status;
             });
         });
 
-        Promise.all(pending).then(function () {
+        // Promise.all preserves input order even when the network does not.
+        Promise.all(pending).then(function (sections) {
+            sections.forEach(function (section) {
+                if (!section) return;
+                container.appendChild(section);
+                if (!firstCard) firstCard = section.querySelector('.jq-focusable');
+            });
             if (!container.children.length) {
                 var empty = document.createElement('p');
                 empty.className = 'jq-home-empty';
@@ -71,7 +75,7 @@
             var seeAll = document.createElement('button');
             seeAll.className = 'jq-card jq-focusable jq-see-all';
             seeAll.textContent = 'See All';
-            seeAll.addEventListener('click', function () { callbacks.onSeeAll(row); });
+            seeAll.addEventListener('click', function () { callbacks.onSeeAll({ title: row.title }); });
             rowEl.appendChild(seeAll);
         }
         section.appendChild(rowEl);

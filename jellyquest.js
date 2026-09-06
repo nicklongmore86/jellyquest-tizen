@@ -2599,7 +2599,7 @@
     'use strict';
 
     // callbacks: { onSelectItem(item), onSeeAll(row) } where row is
-    // { title, fetch: () => Promise<{Items}> } for the Library screen.
+    // { title } for the Library screen, which owns its query.
     function renderHome(container, callbacks) {
         container.innerHTML = '';
         container.className = 'jq-home-screen';
@@ -2608,12 +2608,12 @@
         var rows = [
             {
                 title: 'Continue Watching',
-                fetch: function () { return window.ApiClient.getItems(userId, { Filters: 'IsResumable' }); },
+                fetch: function () { return window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' }); },
                 seeAll: false,
             },
             {
                 title: 'Recently Added',
-                fetch: function () { return window.ApiClient.getItems(userId, { SortBy: 'DateCreated', Limit: 8 }); },
+                fetch: function () { return window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Series', SortBy: 'DateCreated', SortOrder: 'Descending', Limit: 8 }); },
                 seeAll: true,
             },
         ];
@@ -2621,20 +2621,24 @@
         var firstCard = null;
         var pending = rows.map(function (row) {
             return row.fetch().then(function (result) {
-                if (!result.Items.length) return;
-                var section = renderRow(row, result.Items, callbacks);
-                container.appendChild(section);
-                if (!firstCard) firstCard = section.querySelector('.jq-focusable');
+                if (!result.Items.length) return null;
+                return renderRow(row, result.Items, callbacks);
             }).catch(function (error) {
                 var status = document.createElement('p');
                 status.className = 'jq-home-empty';
                 status.textContent = row.title + ' is unavailable right now.';
-                container.appendChild(status);
                 console.error('[JellyQuest] Home row failed:', error);
+                return status;
             });
         });
 
-        Promise.all(pending).then(function () {
+        // Promise.all preserves input order even when the network does not.
+        Promise.all(pending).then(function (sections) {
+            sections.forEach(function (section) {
+                if (!section) return;
+                container.appendChild(section);
+                if (!firstCard) firstCard = section.querySelector('.jq-focusable');
+            });
             if (!container.children.length) {
                 var empty = document.createElement('p');
                 empty.className = 'jq-home-empty';
@@ -2666,7 +2670,7 @@
             var seeAll = document.createElement('button');
             seeAll.className = 'jq-card jq-focusable jq-see-all';
             seeAll.textContent = 'See All';
-            seeAll.addEventListener('click', function () { callbacks.onSeeAll(row); });
+            seeAll.addEventListener('click', function () { callbacks.onSeeAll({ title: row.title }); });
             rowEl.appendChild(seeAll);
         }
         section.appendChild(rowEl);
@@ -2710,7 +2714,12 @@
         grid.style.gridTemplateColumns = 'repeat(' + COLUMNS + ', 220px)';
         container.appendChild(grid);
 
-        row.fetch().then(function (result) {
+        var userId = window.ApiClient.getCurrentUserId();
+        // Bounded independently of Home. Pagination remains follow-up work.
+        window.ApiClient.getItems(userId, {
+            Recursive: true, IncludeItemTypes: 'Movie,Series',
+            SortBy: 'DateCreated', SortOrder: 'Descending', Limit: 50
+        }).then(function (result) {
             result.Items.forEach(function (item, index) {
                 var card = window.JellyQuestCards.createCard(item, {
                     onSelect: function () { callbacks.onSelectItem(item); },
@@ -2765,7 +2774,7 @@
 
         var empty = document.createElement('p');
         empty.className = 'jq-search-empty';
-        empty.textContent = 'No matches.';
+        empty.textContent = 'No films or shows match. Episode search isn’t available yet.';
         empty.hidden = true;
         container.appendChild(empty);
 
@@ -2781,18 +2790,22 @@
             var currentSearchId = searchId;
             resultsRow.innerHTML = '';
             empty.hidden = true;
-            empty.textContent = 'No matches.';
+            empty.textContent = 'No films or shows match. Episode search isn’t available yet.';
             empty.classList.remove('jq-search-error');
             if (!term.trim()) return;
             var userId = window.ApiClient.getCurrentUserId();
-            window.ApiClient.getItems(userId, { SearchTerm: term }).then(function (result) {
+            window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Series', SearchTerm: term, Limit: 24 }).then(function (result) {
                 if (currentSearchId !== searchId || input.value !== term) return; // a newer search superseded this one
                 empty.hidden = true;
-                empty.textContent = 'No matches.';
+                empty.textContent = 'No films or shows match. Episode search isn’t available yet.';
                 empty.classList.remove('jq-search-error');
                 if (!result.Items.length) {
                     empty.hidden = false;
                     return;
+                }
+                if (typeof result.TotalRecordCount === 'number' && result.TotalRecordCount > result.Items.length) {
+                    empty.textContent = 'Showing the first ' + result.Items.length + ' of ' + result.TotalRecordCount + ' matches — try a more specific title.';
+                    empty.hidden = false;
                 }
                 result.Items.forEach(function (item) {
                     resultsRow.appendChild(window.JellyQuestCards.createCard(item, {
@@ -3479,11 +3492,16 @@
         return null;
     }
 
-    // Always hands back a promise -- including when playbackManager is
-    // missing altogether -- so Detail has exactly one rejection path to
-    // render an error from.
+    // Shared eligibility for card navigation and playback handoff.
+    function canPlay(item, allowTrailer) {
+        return !!(item && item.Id && !item.IsFolder &&
+            (item.Type === 'Movie' || item.Type === 'Episode' || (allowTrailer && item.Type === 'Trailer')));
+    }
+
+    // Always return a promise so Detail paints rejected playback requests.
     function requestPlayback(item, options) {
         try {
+            if (!canPlay(item, true)) throw new Error('This item is not available for playback.');
             options.serverId = serverIdFor(item);
             return Promise.resolve(window.playbackManager.play(options));
         } catch (error) {
@@ -3494,7 +3512,30 @@
     function showDetail(item, returnTo) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
-        window.JellyQuestDetailScreen.render(window.JellyQuestShell.getContent(), item, {
+        var container = window.JellyQuestShell.getContent();
+        // All card entry points share this guard. Series browsing is separate
+        // work; give unsupported items a visible state and a remote-safe exit.
+        if (!canPlay(item, false)) {
+            container.innerHTML = '';
+            container.className = 'jq-detail-screen';
+            var heading = document.createElement('h1');
+            heading.className = 'jq-detail-title';
+            heading.textContent = item && item.Name ? item.Name : 'Unavailable item';
+            container.appendChild(heading);
+            var status = document.createElement('p');
+            status.className = 'jq-detail-error';
+            status.textContent = item && item.Type === 'Series' ? 'Series browsing is not available yet.' : 'This item is not available for playback.';
+            container.appendChild(status);
+            var back = document.createElement('button');
+            back.className = 'jq-back-button jq-focusable';
+            back.textContent = '< Back';
+            back.setAttribute('data-jq-autofocus', '');
+            back.addEventListener('click', returnTo);
+            container.appendChild(back);
+            window.JellyQuestFocus.focusFirst(container);
+            return;
+        }
+        window.JellyQuestDetailScreen.render(container, item, {
             onPlay: function (playItem, startPositionTicks) {
                 return requestPlayback(playItem, { ids: [playItem.Id], startPositionTicks: startPositionTicks });
             },

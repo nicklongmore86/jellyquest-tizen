@@ -131,11 +131,16 @@
         return null;
     }
 
-    // Always hands back a promise -- including when playbackManager is
-    // missing altogether -- so Detail has exactly one rejection path to
-    // render an error from.
+    // Shared eligibility for card navigation and playback handoff.
+    function canPlay(item, allowTrailer) {
+        return !!(item && item.Id && !item.IsFolder &&
+            (item.Type === 'Movie' || item.Type === 'Episode' || (allowTrailer && item.Type === 'Trailer')));
+    }
+
+    // Always return a promise so Detail paints rejected playback requests.
     function requestPlayback(item, options) {
         try {
+            if (!canPlay(item, true)) throw new Error('This item is not available for playback.');
             options.serverId = serverIdFor(item);
             return Promise.resolve(window.playbackManager.play(options));
         } catch (error) {
@@ -146,7 +151,30 @@
     function showDetail(item, returnTo) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
-        window.JellyQuestDetailScreen.render(window.JellyQuestShell.getContent(), item, {
+        var container = window.JellyQuestShell.getContent();
+        // All card entry points share this guard. Series browsing is separate
+        // work; give unsupported items a visible state and a remote-safe exit.
+        if (!canPlay(item, false)) {
+            container.innerHTML = '';
+            container.className = 'jq-detail-screen';
+            var heading = document.createElement('h1');
+            heading.className = 'jq-detail-title';
+            heading.textContent = item && item.Name ? item.Name : 'Unavailable item';
+            container.appendChild(heading);
+            var status = document.createElement('p');
+            status.className = 'jq-detail-error';
+            status.textContent = item && item.Type === 'Series' ? 'Series browsing is not available yet.' : 'This item is not available for playback.';
+            container.appendChild(status);
+            var back = document.createElement('button');
+            back.className = 'jq-back-button jq-focusable';
+            back.textContent = '< Back';
+            back.setAttribute('data-jq-autofocus', '');
+            back.addEventListener('click', returnTo);
+            container.appendChild(back);
+            window.JellyQuestFocus.focusFirst(container);
+            return;
+        }
+        window.JellyQuestDetailScreen.render(container, item, {
             onPlay: function (playItem, startPositionTicks) {
                 return requestPlayback(playItem, { ids: [playItem.Id], startPositionTicks: startPositionTicks });
             },
