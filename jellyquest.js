@@ -3672,12 +3672,31 @@
     // and only a remote.
     //
     // The fix takes its guarantee from the INPUT rather than from that
-    // branch. An item carrying no RemoteTrailers gives any fallback nothing
-    // to build a remote pseudo-item out of -- that method's only source of
-    // remote URLs is the item handed to it. So this holds even if upstream's
-    // logic is not exactly as read above, which matters, because nobody can
-    // re-verify it on the hardware. A shallow copy, so the caller's item (the
-    // one Detail still holds and paints from) is left untouched.
+    // branch: an item carrying no RemoteTrailers gives the fallback nothing
+    // to build a remote pseudo-item out of, because the item handed in is
+    // that method's only source of remote URLs.
+    //
+    // Be exact about how far that is established. VERIFIED by execution
+    // against the PINNED local-player implementation (.jellyfin-web-ref
+    // 35c0793): with RemoteTrailers stripped, an empty or null local lookup
+    // rejects without reaching playback, successful local playback is
+    // unaffected, and getLocalTrailers offers no other item field or
+    // failure-path URL to fall back to. That is a statement about THIS ref,
+    // not about however upstream might be written in future -- a ref bump
+    // must re-verify it. Stripping the input is simply the strongest defence
+    // available from this side of the call: it does not depend on which
+    // branch upstream takes, only on there being no remote data to take.
+    //
+    // Out of scope and deliberately unmodelled: the active-player delegation
+    // at playbackmanager.js:3894 (`if (player?.playTrailers) return
+    // player.playTrailers(item)`) hands the whole item to a cast target
+    // before any of the above runs. JellyQuest has no cast UI, so that
+    // branch is unreachable in the supported app flow and the stub does not
+    // model it -- for the same reason dev/fixtures/playback-manager-stub.js
+    // declines to model remote-player delegation in play().
+    //
+    // A shallow copy, so the caller's item -- the one Detail still holds and
+    // paints from -- is left untouched.
     function localTrailersOnly(item) {
         var copy = {};
         Object.keys(item).forEach(function (key) {

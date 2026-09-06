@@ -531,12 +531,19 @@ html, body {
    of a guessed line count.
 
    The overview is NOT focusable and the TV has no pointer, so a synopsis
-   longer than the space left is visually truncated: MEASURED at 1920x1080
-   with a 27px root, roughly 954 characters are fully readable, or 851 with
-   an error line also on screen; a 1,500-character synopsis loses about
-   36-43% of its text. Whether that bites in practice is UNKNOWN -- it has
-   not been established that household synopses are typically short enough,
-   and the only real sample measured was 103 characters.
+   longer than the space left is visually truncated. MEASURED under these
+   conditions, ALL of which are needed to reproduce the figures: a 1920x1080
+   viewport, a 27px root font AND this paragraph explicitly scaled to
+   30.375px (18px x 27/16, the same ~69% device-text factor
+   test/e2e/detail.spec.mjs applies). Setting only the root to 27px does not
+   reproduce them, because this rule sizes the text in px and a root change
+   alone does not reach it. Under those conditions roughly 954 characters
+   are fully readable, or 851 with an error line also on screen, and a
+   1,500-character synopsis loses about 36-43% of its text.
+
+   Whether that bites in practice is UNKNOWN -- it has not been established
+   that household synopses are typically short enough, and the only real
+   sample measured was 103 characters.
 
    Making it scrollable is deliberately NOT done here: it needs its own
    design (how a non-control advertises that it scrolls, and how the remote
