@@ -310,10 +310,13 @@ for (const cardHeight of [130, 330, 124]) {
             const page = await browser.newPage({ viewport });
             await signInAsAlice(page);
             // Two selectors deep, so it beats cards.css wherever that lands
-            // in document order. Applied at every height, including the
-            // real 130px, so the override path itself is always exercised.
+            // in document order. Reset the poster padding as well as its height;
+            // otherwise the 346px artwork reservation sets the card's minimum
+            // rendered size and none of these requested geometries takes effect.
+            // Applied at every height, including the real 130px, so the override
+            // path itself is always exercised.
             await page.addStyleTag({
-                content: `.jq-library-grid .jq-media-card { height: ${cardHeight}px; }`,
+                content: `.jq-library-grid .jq-media-card { height: ${cardHeight}px; padding-top: 16px; }`,
             });
             // Setup only; every move below is a key press. See the note on
             // the 28-item test above for why a taller grid cannot be

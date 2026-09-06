@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
 import { startServer } from './support/server.mjs';
+import { assertPainted } from './support/paint.mjs';
 
 const server = await startServer();
 const simulatorUrl = `${server.baseUrl}/dev/simulator.html`;
@@ -59,14 +60,97 @@ test('Play/Resume/Start Over call playbackManager.play with the right start posi
         await openDetail(page, 'movie-1');
 
         await page.keyboard.press('Enter'); // Resume
+        await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
         const resumeCall = await page.evaluate(() => window.playbackManager.__calls.slice(-1)[0]);
         assert.equal(resumeCall.ids[0], 'movie-1');
         assert.ok(resumeCall.startPositionTicks > 0, 'Resume must start from the saved position');
 
         await page.keyboard.press('ArrowRight'); // Start Over
         await page.keyboard.press('Enter');
+        await page.waitForFunction(() => window.playbackManager.__calls.length > 1);
         const startOverCall = await page.evaluate(() => window.playbackManager.__calls.slice(-1)[0]);
         assert.equal(startOverCall.startPositionTicks, 0);
+    } finally {
+        await browser.close();
+    }
+});
+
+// The real player refuses `ids` with no server to resolve them against --
+// `if (!items) { if (!options.serverId) throw new Error('serverId required!') }`
+// at .cache/jellyfin-web/src/components/playback/playbackmanager.js:2101 --
+// and dev/fixtures/playback-manager-stub.js now rejects the same way. These
+// assertions state the requirement directly rather than leaving it implied by
+// the stub, so a caller that drops serverId fails here with a readable reason.
+test('every play request names the server the ids belong to', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openDetail(page, 'movie-1');
+
+        await page.keyboard.press('Enter'); // Resume
+        await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
+        const call = await page.evaluate(() => window.playbackManager.__calls.slice(-1)[0]);
+        // The item's own ServerId, as jellyfin-web's playmenu.js:41-51 sends.
+        assert.equal(call.serverId, 'dev-server-1');
+
+        // And the fallback for an item that carries no ServerId of its own:
+        // ApiClient.serverId(), the accessor jellyfin-web reaches for in the
+        // same situation (mediaSegmentManager.ts:91).
+        await page.evaluate(() => {
+            const getItems = window.ApiClient.getItems;
+            window.ApiClient.getItems = (userId, options) => getItems(userId, options).then((result) => ({
+                ...result,
+                Items: result.Items.map((item) => {
+                    const stripped = { ...item };
+                    delete stripped.ServerId;
+                    return stripped;
+                }),
+            }));
+            window.playbackManager.__calls.length = 0;
+            document.querySelector('.jq-nav-home').click();
+        });
+        await page.waitForSelector('.jq-media-card');
+        await page.evaluate(() => document.querySelector('[data-item-id="movie-1"]').click());
+        await page.waitForSelector('.jq-detail-screen');
+        await page.evaluate(() => Array.from(document.querySelectorAll('.jq-detail-action'))
+            .find((button) => /^(Play|Resume)$/.test(button.textContent)).click());
+        await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
+        assert.equal(
+            await page.evaluate(() => window.playbackManager.__calls.slice(-1)[0].serverId),
+            'dev-server-1'
+        );
+    } finally {
+        await browser.close();
+    }
+});
+
+test('a play request the player refuses is visible on screen', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openDetail(page, 'movie-1');
+
+        await page.evaluate(() => {
+            window.playbackManager.play = () => Promise.reject(new Error('serverId required!'));
+        });
+        await page.keyboard.press('Enter'); // Resume
+
+        const message = page.getByText('Could not start playback. Try again.', { exact: true });
+        await message.waitFor({ state: 'visible', timeout: 2000 });
+        // Playwright visibility alone would still pass with this message
+        // painted underneath the opaque #jellyquest-root, or under any other
+        // layer above it -- which is how two earlier assertions in this repo
+        // came to be checking something nobody could actually see. The shared
+        // paint check (PR #18, test/e2e/support/paint.mjs) tests the real
+        // stacking context instead.
+        await assertPainted(message);
+
+        // A retry that succeeds must clear it rather than leave a stale error.
+        await page.evaluate(() => {
+            window.playbackManager.play = () => Promise.resolve();
+        });
+        await page.keyboard.press('Enter');
+        await message.waitFor({ state: 'hidden', timeout: 2000 });
     } finally {
         await browser.close();
     }

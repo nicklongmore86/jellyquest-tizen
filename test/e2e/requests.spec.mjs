@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
 import { startServer } from './support/server.mjs';
+import { assertPainted } from './support/paint.mjs';
 
 const server = await startServer();
 const simulatorUrl = `${server.baseUrl}/dev/simulator.html`;
@@ -244,23 +245,6 @@ for (const scenario of ['library search', 'library', 'home', 'profiles', 'favori
             await browser.close();
         }
     });
-}
-
-// Visibility alone accepts text beneath the opaque app root. Check its real
-// stacking context and the hit target at the message's center as well.
-async function assertPainted(locator) {
-    const paint = await locator.evaluate((element) => {
-        const rect = element.getBoundingClientRect();
-        const top = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
-        return {
-            insideRoot: document.getElementById('jellyquest-root').contains(element),
-            hasHitTarget: top !== null,
-            unobscured: top === element || element.contains(top),
-        };
-    });
-    assert.equal(paint.insideRoot, true, 'message is not inside #jellyquest-root');
-    assert.equal(paint.hasHitTarget, true, 'message center is outside the viewport or has no hit target');
-    assert.equal(paint.unobscured, true, 'message is obscured by another painted element');
 }
 
 for (const screen of ['Requests', 'library']) {
