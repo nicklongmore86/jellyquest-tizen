@@ -47,8 +47,29 @@
     --spatial-navigation-contain: auto;
 }
 
+/* A row holds one card per library item, so it is routinely wider than the
+   screen. `overflow: hidden` makes it a scrollport that focus.js's
+   revealFocus() can scroll programmatically as the cursor moves -- without
+   which the cards past the screen edge are unreachable by remote, because
+   the polyfill will not move focus to an element it cannot see.
+
+   Deliberately `hidden`, not `auto`/`scroll`: the TV has no pointer, so a
+   scrollbar is pure visible chrome, and the polyfill's own isScrollable()
+   excludes `hidden` on purpose ("the element can be only programmically
+   scrollable") -- which keeps it from nudging the row 40px per key press
+   via moveScroll() instead of moving the cursor. */
 .jq-row {
     display: flex;
+    overflow: hidden;
+    /* Room on all four sides for the .jq-focusable focus ring (a 0.15rem
+       stroke at 0.1rem offset reaches ~4px outside the card), which the
+       clipping above would otherwise shear off every card in every row.
+       The equal negative margin cancels it, so no child moves by a pixel
+       and the row still lines up with its heading. A screen that overrides
+       one of these margins must subtract the 6px itself -- see
+       src/overlay/screens/search.css and screens/requests.css. */
+    padding: 6px;
+    margin: -6px;
     --spatial-navigation-contain: auto;
 }
 
@@ -405,6 +426,12 @@ html, body {
 .jq-search-screen {
     padding: 48px;
     box-sizing: border-box;
+    /* Scrollport for the results row's own overflow, and -- because a flex
+       item's automatic minimum size is only content-based while its
+       overflow is `visible` -- what also lets this screen shrink to the
+       shell's flex line instead of being pushed wider than the TV by a
+       long row. See the .jq-row scroll-container note in focus.css. */
+    overflow: hidden;
 }
 
 .jq-search-input {
@@ -423,7 +450,9 @@ html, body {
 }
 
 .jq-search-results {
-    margin-top: 32px;
+    /* 26px + .jq-row's 6px focus-ring padding = the intended 32px below
+       the input; see the padding/margin note in focus.css. */
+    margin-top: 26px;
 }
 
 /* Sibling margins, not flex `gap` -- see the spacing convention in focus.css. */
@@ -540,9 +569,11 @@ html, body {
 
 .jq-requests-results {
     /* Compensate child margins so wrapped rows keep 20px spacing and
-       the first card stays aligned, 32px below the input. */
-    margin-top: 12px;
-    margin-left: -20px;
+       the first card stays aligned, 32px below the input. Each value also
+       absorbs .jq-row's 6px focus-ring padding (12 - 6, -20 - 6); see the
+       padding/margin note in focus.css. */
+    margin-top: 6px;
+    margin-left: -26px;
     flex-wrap: wrap;
 }
 
