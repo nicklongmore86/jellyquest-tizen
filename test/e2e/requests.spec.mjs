@@ -297,20 +297,30 @@ for (const outcome of ['rejected', 'empty']) {
             await openRequestsAs(page, 'Alice');
             await page.evaluate(() => document.querySelector('.jq-nav-home').click());
             await page.waitForSelector('.jq-card');
+            // Trailer activation now goes through playbackManager.playTrailers()
+            // rather than ApiClient.getLocalTrailers() + play() (see app.js's
+            // onPlayTrailer). Its two rejection shapes are what produce the
+            // two distinct messages: a real error, and the bare
+            // `Promise.reject()` of playbackmanager.js:3924, which means
+            // "nothing to play" rather than "something went wrong".
             await page.evaluate((outcome) => {
-                window.ApiClient.getLocalTrailers = () => outcome === 'rejected'
-                    ? Promise.reject(new Error('Offline')) : Promise.resolve([]);
+                window.__realPlayTrailers = window.playbackManager.playTrailers;
+                window.playbackManager.playTrailers = () => outcome === 'rejected'
+                    ? Promise.reject(new Error('Offline')) : Promise.reject();
             }, outcome);
             await page.locator('.jq-card').first().click();
-            await page.getByRole('button', { name: 'Trailer', exact: true }).click();
+            const trailer = page.getByRole('button', { name: 'Trailer', exact: true });
+            await trailer.waitFor(); // Detail fetches the full item before it can offer this
+            await trailer.click();
             const message = page.getByText(outcome === 'rejected' ? 'Could not load trailer. Try again.' : 'No trailer available.', { exact: true });
             await message.waitFor({ state: 'visible', timeout: 2000 });
             await assertPainted(message);
             await page.evaluate(() => {
+                window.playbackManager.playTrailers = window.__realPlayTrailers;
                 window.ApiClient.getLocalTrailers = () => Promise.resolve([{ Id: 'trailer-retry', Type: 'Trailer', ServerId: 'dev-server-1' }]);
             });
-            await page.getByRole('button', { name: 'Trailer', exact: true }).click();
-            await page.waitForFunction(() => window.playbackManager.__calls.some((call) => call.ids[0] === 'trailer-retry'));
+            await trailer.click();
+            await page.waitForFunction(() => window.playbackManager.__calls.some((call) => call.items && call.items[0].Id === 'trailer-retry'));
             assert.equal(await message.isVisible(), false);
         } finally {
             await browser.close();

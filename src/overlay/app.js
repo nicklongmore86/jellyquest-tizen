@@ -178,15 +178,39 @@
             onPlay: function (playItem, startPositionTicks) {
                 return requestPlayback(playItem, { ids: [playItem.Id], startPositionTicks: startPositionTicks });
             },
+            // Trailers go through jellyfin-web's own playTrailers()
+            // (playbackmanager.js:3891-3925) rather than requestPlayback().
+            // Detail only offers a Trailer for an item with
+            // LocalTrailerCount > 0 (see the gate in detail.js), which is
+            // exactly playTrailers()'s getLocalTrailers branch: it fetches
+            // the real trailer items and hands them to play() as `items`, so
+            // it never builds the Id-less pseudo-item its RemoteTrailers
+            // branch uses -- the shape canPlay() would refuse.
+            //
+            // Guarded by typeof rather than called directly: playbackManager
+            // is jellyfin-web's global, created by this project's build-time
+            // patch (scripts/patch-jellyfin-web.mjs), and a missing one must
+            // surface as Detail's visible "Could not load trailer" state
+            // rather than a TypeError inside a click handler.
             onPlayTrailer: function (playItem) {
-                var userId = window.ApiClient.getCurrentUserId();
-                return window.ApiClient.getLocalTrailers(userId, playItem.Id).then(function (trailers) {
-                    if (!trailers.length) return false;
-                    // The trailer is its own item, so its own ServerId is the
-                    // right one to send.
-                    return requestPlayback(trailers[0], { ids: [trailers[0].Id] }).then(function () {
-                        return true;
-                    });
+                var manager = window.playbackManager;
+                if (!manager || typeof manager.playTrailers !== 'function') {
+                    return Promise.reject(new Error('playbackManager.playTrailers is unavailable.'));
+                }
+                return Promise.resolve(manager.playTrailers(playItem)).then(function () {
+                    return true;
+                }, function (error) {
+                    // Two different rejections, and Detail shows a different
+                    // message for each. playTrailers() rejects with NO
+                    // ARGUMENT when there was nothing to play at all
+                    // (playbackmanager.js:3924, the branch reached when the
+                    // item has neither local nor remote trailers) -- that is
+                    // "no trailer available", not a failure. Anything that
+                    // actually went wrong rejects with a real error. Compare
+                    // rather than dereference: the empty case has no error to
+                    // read, and reading it would throw inside the handler.
+                    if (error === undefined) return false;
+                    throw error;
                 });
             },
         });

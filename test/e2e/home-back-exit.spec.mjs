@@ -268,6 +268,33 @@ test('a Home render that completes while the exit confirmation is open does not 
     }
 });
 
+// Contain mode (`--spatial-navigation-contain: contain` in focus.css) used to
+// be asserted on Detail's Playback Options dialog. That dialog is no longer
+// rendered (see TRACK_SELECTION_ENABLED in src/overlay/screens/detail.js), so
+// the invariant moves here rather than being dropped: this is now the only
+// .jq-modal a user can actually open.
+test('the exit confirmation contains focus: no arrow key escapes it', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openHomeAsAlice(page);
+
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.jq-exit-confirm', { state: 'visible' });
+
+        const inside = () => page.evaluate(() =>
+            document.querySelector('.jq-exit-confirm').contains(document.activeElement));
+        for (const key of ['ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowRight', 'ArrowDown']) {
+            await page.keyboard.press(key);
+            assert.equal(await inside(), true, `${key} must not move focus out of the dialog`);
+        }
+        // Right did reach the other answer -- containment, not paralysis.
+        assert.equal(await page.evaluate(() => document.activeElement.className.includes('jq-exit-yes')), true);
+    } finally {
+        await browser.close();
+    }
+});
+
 test('the confirmation answers are operable from the remote: Enter on No dismisses', async () => {
     const browser = await chromium.launch();
     try {

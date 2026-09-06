@@ -14,7 +14,17 @@ JellyQuest keeps Jellyfin as the playback authority. The TV UI exposes these act
 
 ## Trailers
 
-Jellyfin's detail controller exposes Trailer only when the item has `LocalTrailerCount` or one or more `RemoteTrailers`, and the active player advertises `PlayTrailers`. Local trailers are requested with `getLocalTrailers`; remote entries are passed to Jellyfin's playback manager as URL-backed trailer items. JellyQuest preserves that behavior and does not display a trailer action for an item without a trailer URL or local trailer.
+Jellyfin's detail controller exposes Trailer when the item has `LocalTrailerCount` **or** one or more `RemoteTrailers`, and the active player advertises `PlayTrailers` (`controllers/itemDetails/index.js:502`). Local trailers are requested with `getLocalTrailers`; remote entries are passed to Jellyfin's playback manager as URL-backed trailer items.
+
+**JellyQuest deliberately diverges: the gate is `LocalTrailerCount > 0` only.** A film with only `RemoteTrailers` gets no Trailer action at all.
+
+Why: jellyfin-web plays a remote trailer *in-app* through a YouTube IFrame embed — `playbackmanager.js:3891-3925` builds an Id-less pseudo-item and dispatches on `canPlayUrl`, handled by `plugins/youtubePlayer/plugin.js:251-253`, registered in `www/config.json`. MEASURED: the packaged app is loaded from a `file://` URL on both of the household's sets (see the README's "Target hardware" section), which gives it a null origin. INFERRED, and **not settleable without the television**: the YouTube IFrame API handshake is origin-governed and the plugin's own error table already includes 101/150 `YoutubeDenied`, so a null origin is expected to be refused. A second unresolved unknown, also INFERRED: the youtube container sits at `z-index: 1000`, far below `#jellyquest-root`'s `2147483000`, so even a working embed would be expected to play behind the overlay.
+
+A button that probably does nothing visible is worse on a TV than no button, so the narrower gate stands until someone can measure the embed on real hardware. Do not widen it back to the upstream condition on inference alone.
+
+Trailer activation goes through `playbackManager.playTrailers(item)`, guarded by `typeof`. Under a local-only gate that always takes the `getLocalTrailers` branch, which hands real trailer items to `play()` — it never constructs the Id-less pseudo-item the playback guard would refuse. Note that `playTrailers()` rejects with **no** argument (`playbackmanager.js:3924`), so nothing may dereference the rejection value.
+
+The full item (not the list item) is what reaches `playTrailers()`: `LocalTrailerCount` and `ServerId` are read off it, and list responses carry neither `LocalTrailerCount` nor a trailer count of any kind.
 
 ## Sports highlights
 
@@ -23,6 +33,8 @@ Jellyfin does not define a sports-highlight media type or generate a condensed g
 JellyQuest therefore treats highlights as real media. It requests the event's Jellyfin special features and shows Highlights only when a playable feature name contains `Highlight`, `Highlights`, `Condensed Game`, or `Game Recap`. Selecting it plays that feature from the beginning. If no matching feature is indexed, the action remains hidden.
 
 ## More menu
+
+**Not shipped yet: the More button is not rendered.** The dialog is built in `src/overlay/screens/detail.js` but is gated off behind `TRACK_SELECTION_ENABLED = false`, because track selection has never been wired to playback — the option buttons carry no listeners, nothing stores a selection, and the play request sends only `{ ids, startPositionTicks, serverId }`. It was previously unreachable on a television anyway (`MediaStreams` is absent from list responses), so nobody has ever seen it. Rendering it now would put a genuinely dead control in front of the user for the first time. A follow-up implements selection and turns the flag on. The rest of this section describes the intended behavior once it is.
 
 JellyQuest replaces Jellyfin's general item-management overflow with focused playback options. Audio appears only when more than one track is available. Subtitles appears when at least one subtitle exists and always includes Off. Version appears only for items with multiple media sources. When none of those choices is configurable, More is hidden.
 

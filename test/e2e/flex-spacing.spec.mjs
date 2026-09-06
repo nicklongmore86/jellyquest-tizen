@@ -28,13 +28,13 @@ async function openScreen(page, screen) {
         await page.waitForSelector('.jq-library-grid .jq-media-card');
         return;
     }
-    if (screen === 'detail' || screen === 'playback') {
+    if (screen === 'detail') {
         await page.locator('[data-item-id="movie-1"]').click();
         await page.waitForSelector('.jq-detail-action');
-        if (screen === 'playback') {
-            await page.locator('.jq-detail-action').filter({ hasText: /^More$/ }).click();
-            await page.waitForSelector('.jq-playback-options');
-        }
+        // Wait for the on-demand full-item fetch to patch the row, so the
+        // measurement covers the final set of children rather than the
+        // synchronous first paint (see src/overlay/screens/detail.js).
+        await page.getByRole('button', { name: 'Trailer', exact: true }).waitFor();
         return;
     }
     await page.locator(`.jq-nav-${screen}`).click();
@@ -50,8 +50,6 @@ for (const [selector, screen, axis, containers = 1] of [
     ['.jq-home-row', 'home', 'x', 2],
     ['.jq-search-results', 'search', 'x'],
     ['.jq-detail-actions', 'detail', 'x'],
-    ['.jq-playback-options', 'playback', 'y'],
-    ['.jq-playback-option-group', 'playback', 'y', 2],
     ['.jq-exit-actions', 'exit', 'x'],
     ['.jq-request-card', 'requests', 'y', 3],
     ['.jq-requests-results', 'requests', 'wrapped'],
@@ -71,6 +69,47 @@ for (const [selector, screen, axis, containers = 1] of [
             await browser.close();
         }
     });
+}
+
+// .jq-playback-options / .jq-playback-option-group used to be measured in the
+// browser through Detail's More button. That button is no longer rendered
+// (track selection was never wired to playback -- see TRACK_SELECTION_ENABLED
+// in src/overlay/screens/detail.js and the More menu section of
+// DETAIL_ACTIONS.md), so the dialog has no reachable instance to measure and
+// those two cases were removed from the table above.
+//
+// The stylesheet is still shipped and the follow-up that wires selection will
+// render it again, so the spacing convention is guarded at the source instead
+// -- the same shape this file already uses for the library grid below. A
+// measurement is strictly better and should come back with the button.
+test('the unrendered playback-options dialog keeps sibling-margin spacing in its stylesheet', async () => {
+    const css = await readFile(new URL('../../src/overlay/screens/detail.css', import.meta.url), 'utf8');
+    for (const selector of ['.jq-playback-options', '.jq-playback-option-group']) {
+        assertSiblingMarginRule(css, selector);
+    }
+});
+
+test('the source spacing guard accepts sibling margins and rejects flex gap', () => {
+    assert.doesNotThrow(() => assertSiblingMarginRule('.jq-thing > * + * { margin-top: 16px; }', '.jq-thing'));
+    assert.throws(() => assertSiblingMarginRule('.jq-thing { display: flex; gap: 16px; }', '.jq-thing'),
+        /must space its children with sibling margins/);
+    assert.throws(() => assertSiblingMarginRule('.jq-thing > * + * { margin-top: 16px; }\n.jq-thing { gap: 16px; }', '.jq-thing'),
+        /must not depend on flex gap/);
+    assert.throws(() => assertSiblingMarginRule('.jq-other > * + * { margin-top: 16px; }', '.jq-thing'),
+        /must space its children with sibling margins/);
+});
+
+function assertSiblingMarginRule(css, selector) {
+    const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const siblingRule = new RegExp(`${escaped}\\s*>\\s*\\*\\s*\\+\\s*\\*\\s*\\{([^}]*)\\}`);
+    const sibling = stripped.match(siblingRule);
+    assert.ok(sibling, `${selector} must space its children with sibling margins`);
+    assert.match(sibling[1], /margin-(?:top|left)\s*:/, `${selector} sibling rule must set a margin`);
+    for (const rule of stripped.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 'g'))) {
+        assert.doesNotMatch(rule[1], /(?:^|;)\s*(?:gap|row-gap|column-gap)\s*:/,
+            `${selector} must not depend on flex gap`);
+    }
 }
 
 // In modern Chromium, gap and grid-gap are aliases: injecting gap: 0 also

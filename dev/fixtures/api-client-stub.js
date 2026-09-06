@@ -41,7 +41,16 @@
                 { Type: 'Subtitle', DisplayTitle: 'French' },
             ],
         },
-        { Id: 'movie-2', Name: 'Quiet Signal', ProductionYear: 2022, RunTimeTicks: 6300 * TICKS_PER_SECOND, Overview: 'A radio operator picks up a transmission that shouldn’t exist.', LocalTrailerCount: 0 },
+        // The RemoteTrailers-only case. Real servers return this shape, and
+        // upstream jellyfin-web would offer a Trailer button for it;
+        // JellyQuest deliberately does not (see detail.js's trailer gate),
+        // so the fixture has to contain one for that divergence to be
+        // testable at all.
+        {
+            Id: 'movie-2', Name: 'Quiet Signal', ProductionYear: 2022, RunTimeTicks: 6300 * TICKS_PER_SECOND,
+            Overview: 'A radio operator picks up a transmission that shouldn’t exist.', LocalTrailerCount: 0,
+            RemoteTrailers: [{ Url: 'https://www.youtube.com/watch?v=dev-quiet-signal', Name: 'Quiet Signal - Official Trailer' }],
+        },
         { Id: 'movie-3', Name: 'Low Tide', ProductionYear: 2020, RunTimeTicks: 5700 * TICKS_PER_SECOND, Overview: 'Two sisters return to the coastal town they swore they’d never see again.', LocalTrailerCount: 1 },
         { Id: 'movie-4', Name: 'Static Bloom', ProductionYear: 2024, RunTimeTicks: 6900 * TICKS_PER_SECOND, Overview: 'An artist’s final installation starts finishing itself.', LocalTrailerCount: 0 },
         { Id: 'movie-5', Name: 'Harbor Lights', ProductionYear: 2023, RunTimeTicks: 6600 * TICKS_PER_SECOND, Overview: 'A lighthouse keeper’s last winter on the job.', LocalTrailerCount: 0 },
@@ -110,6 +119,48 @@
         'user-bob': {},
         'user-charlie': {},
     };
+
+    // ---- What a LIST response actually contains -------------------------
+    //
+    // Same principle as the getItems option guard below, in the other
+    // direction: that stops the fixture ACCEPTING options the real server
+    // rejects; this stops it RETURNING fields the real server does not
+    // return.
+    //
+    // MEASURED against the household's Jellyfin 10.11.11 server, the app's
+    // own library query returns exactly the fields below and NOT Overview,
+    // LocalTrailerCount, MediaStreams or MediaSources. The fixture used to
+    // hand all of those back on list results, which is precisely what let
+    // the Detail screen read Overview/LocalTrailerCount/MediaStreams off a
+    // list item and pass every test while showing none of them on the real
+    // television.
+    //
+    // The rich objects above stay intact -- getItem() returns them whole, as
+    // the real single-item endpoint does. Only the LIST projection is
+    // narrowed.
+    var LIST_FIELDS = [
+        // The measured set, verbatim.
+        'Name', 'Id', 'ServerId', 'Type', 'IsFolder', 'HasSubtitles', 'Container',
+        'PremiereDate', 'CriticRating', 'OfficialRating', 'CommunityRating',
+        'RunTimeTicks', 'ProductionYear', 'UserData', 'VideoType', 'ImageTags',
+        'BackdropImageTags', 'ImageBlurHashes', 'LocationType', 'MediaType',
+        // Relational fields the measured responses carry for the item types
+        // that have them, asserted by test/e2e/library-queries.spec.mjs.
+        'ParentId', 'DateCreated', 'SeriesId', 'SeriesName', 'ParentIndexNumber',
+        'IndexNumber', 'ParentBackdropItemId', 'ParentBackdropImageTags',
+        // Root views only: the measured unscoped /Users/{id}/Items response
+        // returns CollectionType on each CollectionFolder. It is not part of
+        // the library query's field set because no library item has one.
+        'CollectionType',
+    ];
+
+    function projectListFields(item) {
+        var projected = {};
+        LIST_FIELDS.forEach(function (field) {
+            if (Object.prototype.hasOwnProperty.call(item, field)) projected[field] = item[field];
+        });
+        return projected;
+    }
 
     function withUserData(item, userId) {
         var data = (USER_DATA[userId] && USER_DATA[userId][item.Id]) || { PlaybackPositionTicks: 0, Played: false, IsFavorite: false };
@@ -215,8 +266,13 @@
             });
             var limit = options && options.Limit;
             var page = typeof limit === 'number' ? sorted.slice(0, limit) : sorted;
-            return Promise.resolve({ Items: page, TotalRecordCount: sorted.length });
+            return Promise.resolve({ Items: page.map(projectListFields), TotalRecordCount: sorted.length });
         },
+        // The single-item endpoint, and the only place the full BaseItemDto
+        // exists. MEASURED: GET /Users/{id}/Items/{itemId} with NO Fields
+        // parameter is 17,153 bytes and already carries Overview,
+        // MediaStreams, LocalTrailerCount and RemoteTrailers -- so no field
+        // projection here, unlike getItems above.
         getItem: function (userId, itemId) {
             var item = FOLDERS.concat(MEDIA).filter(function (entry) { return entry.Id === itemId; })[0];
             return item ? Promise.resolve(withUserData(item, userId)) : Promise.reject(new Error('item not found'));

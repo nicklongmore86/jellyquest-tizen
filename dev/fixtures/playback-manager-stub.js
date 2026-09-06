@@ -56,6 +56,40 @@
             playingVideo = true;
             return Promise.resolve();
         },
+        // Real: playbackmanager.js's self.playTrailers
+        // (playbackmanager.js:3891-3925). Modelled here because Detail's
+        // Trailer action now calls it instead of assembling a play() call
+        // itself (app.js's onPlayTrailer).
+        //
+        // Two branches, and the difference between them is the whole reason
+        // Detail's trailer gate is local-only:
+        //
+        //   LocalTrailerCount > 0 -- getLocalTrailers() returns real
+        //   BaseItemDto trailer items, which go to play() as `items`.
+        //
+        //   otherwise -- RemoteTrailers entries become Id-less pseudo-items
+        //   carrying only a Url, dispatched by canPlayUrl to the YouTube
+        //   IFrame plugin. Modelled so the shape is visible, not because
+        //   JellyQuest ever takes this branch.
+        //
+        // With neither, it rejects with NO ARGUMENT (playbackmanager.js:3924)
+        // -- reproduced exactly, so a caller that dereferences the rejection
+        // value fails here rather than on the television.
+        playTrailers: function (item) {
+            var apiClient = window.ApiClient;
+            if (item.LocalTrailerCount) {
+                return apiClient.getLocalTrailers(apiClient.getCurrentUserId(), item.Id).then(function (trailers) {
+                    return window.playbackManager.play({ items: trailers });
+                });
+            }
+            var remoteTrailers = item.RemoteTrailers || [];
+            if (!remoteTrailers.length) return Promise.reject();
+            return window.playbackManager.play({
+                items: remoteTrailers.map(function (trailer) {
+                    return { Name: trailer.Name, Url: trailer.Url, Type: 'Trailer', MediaType: 'Video' };
+                }),
+            });
+        },
         // Real: playbackmanager.js's self.isPlayingVideo (via
         // isPlayingMediaType('Video')). app.js's Back handler asks this
         // before deciding whether to consume the key or leave it to
