@@ -1,6 +1,12 @@
 .jq-search-screen {
     padding: 48px;
     box-sizing: border-box;
+    /* Scrollport for the results row's own overflow, and -- because a flex
+       item's automatic minimum size is only content-based while its
+       overflow is `visible` -- what also lets this screen shrink to the
+       shell's flex line instead of being pushed wider than the TV by a
+       long row. See the .jq-row scroll-container note in focus.css. */
+    overflow: hidden;
 }
 
 .jq-search-input {
@@ -19,7 +25,9 @@
 }
 
 .jq-search-results {
-    margin-top: 32px;
+    /* 26px + .jq-row's 6px focus-ring padding = the intended 32px below
+       the input; see the padding/margin note in focus.css. */
+    margin-top: 26px;
 }
 
 /* Sibling margins, not flex `gap` -- see the spacing convention in focus.css. */

@@ -10,9 +10,11 @@
 
 .jq-requests-results {
     /* Compensate child margins so wrapped rows keep 20px spacing and
-       the first card stays aligned, 32px below the input. */
-    margin-top: 12px;
-    margin-left: -20px;
+       the first card stays aligned, 32px below the input. Each value also
+       absorbs .jq-row's 6px focus-ring padding (12 - 6, -20 - 6); see the
+       padding/margin note in focus.css. */
+    margin-top: 6px;
+    margin-left: -26px;
     flex-wrap: wrap;
 }
 
