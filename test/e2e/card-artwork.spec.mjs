@@ -106,7 +106,8 @@ test('simulator serves real local posters with stable poster geometry', async ()
         const bounds = await image.boundingBox();
         assert.equal(bounds.width, 220);
         assert.equal(bounds.height, 330);
-        assert.equal(await page.locator('[data-item-id="movie-10"] img').count(), 0);
+        await page.waitForFunction(() => document.querySelector('[data-item-id="movie-10"] img')?.naturalWidth === 220);
+        assert.equal(await page.locator('[data-item-id="movie-10"] img').count(), 1);
         await page.screenshot({ path: '.cache/artwork-preview.png' });
     } finally { await browser.close(); }
 });

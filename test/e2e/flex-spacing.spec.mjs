@@ -89,7 +89,7 @@ test('library grid retains legacy grid-gap and positive spacing on both axes', a
             const { left, right, top, bottom, width, height } = child.getBoundingClientRect();
             return { left, right, top, bottom, width, height };
         }));
-        assert.equal(rects.length, 8, 'Library fixture must contain two full four-card rows');
+        assert.equal(rects.length, 50, 'Library fixture fills its own bound, including a partial last row');
         for (const [i, rect] of rects.entries()) {
             assert.ok(rect.width > 0 && rect.height > 0, 'Library cards must have visible geometry');
             if (i % 4 !== 0) {

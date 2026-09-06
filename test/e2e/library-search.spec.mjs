@@ -24,15 +24,21 @@ test('library grid: full rows and a naturally partial last row both navigate cor
         await page.evaluate(() => document.querySelector('.jq-see-all').click());
         await page.waitForSelector('.jq-library-grid .jq-media-card');
 
-        // 8 items in a 4-column grid: 2 full rows, no partial row here --
-        // the "See All" row is capped at Limit: 8 in the fixture. Still
-        // exercises Down between full rows and selecting an item.
+        // 50 items: 12 full rows plus a partial row of two.
+        assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), 50);
         assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-10');
         await page.keyboard.press('ArrowDown');
         const secondRowFirst = await page.evaluate(() => document.activeElement.getAttribute('data-item-id'));
         assert.notEqual(secondRowFirst, 'movie-10');
         await page.keyboard.press('ArrowUp');
         assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-10');
+        const ids = await page.locator('.jq-library-grid .jq-media-card').evaluateAll(cards => cards.map(card => card.dataset.itemId));
+        for (let row = 0; row < 12; row++) await page.keyboard.press('ArrowDown');
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), ids[48]);
+        await page.keyboard.press('ArrowRight');
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), ids[49]);
+        await page.keyboard.press('ArrowUp');
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), ids[45]);
     } finally {
         await browser.close();
     }

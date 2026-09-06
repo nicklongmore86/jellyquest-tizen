@@ -187,7 +187,8 @@ for (const scenario of ['library search', 'library', 'home', 'profiles', 'favori
                         input.value = 'movie';
                         input.dispatchEvent(new Event('input'));
                     } else if (scenario === 'library') {
-                        window.JellyQuestLibraryScreen.render(container, { title: 'Movies', fetch: reject }, { onBack() {} });
+                        window.ApiClient.getItems = reject;
+                        window.JellyQuestLibraryScreen.render(container, { title: 'Movies' }, { onBack() {} });
                     } else if (scenario === 'home') {
                         const getItems = window.ApiClient.getItems;
                         window.ApiClient.getItems = (userId, options) => options.Filters === 'IsResumable'
@@ -305,7 +306,7 @@ for (const outcome of ['rejected', 'empty']) {
             await message.waitFor({ state: 'visible', timeout: 2000 });
             await assertPainted(message);
             await page.evaluate(() => {
-                window.ApiClient.getLocalTrailers = () => Promise.resolve([{ Id: 'trailer-retry' }]);
+                window.ApiClient.getLocalTrailers = () => Promise.resolve([{ Id: 'trailer-retry', Type: 'Trailer', ServerId: 'dev-server-1' }]);
             });
             await page.getByRole('button', { name: 'Trailer', exact: true }).click();
             await page.waitForFunction(() => window.playbackManager.__calls.some((call) => call.ids[0] === 'trailer-retry'));

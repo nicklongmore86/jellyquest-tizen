@@ -29,7 +29,12 @@
         grid.style.gridTemplateColumns = 'repeat(' + COLUMNS + ', 220px)';
         container.appendChild(grid);
 
-        row.fetch().then(function (result) {
+        var userId = window.ApiClient.getCurrentUserId();
+        // Bounded independently of Home. Pagination remains follow-up work.
+        window.ApiClient.getItems(userId, {
+            Recursive: true, IncludeItemTypes: 'Movie,Series',
+            SortBy: 'DateCreated', SortOrder: 'Descending', Limit: 50
+        }).then(function (result) {
             result.Items.forEach(function (item, index) {
                 var card = window.JellyQuestCards.createCard(item, {
                     onSelect: function () { callbacks.onSelectItem(item); },

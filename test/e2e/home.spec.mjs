@@ -17,7 +17,7 @@ async function signInAsAlice(page) {
     await page.waitForSelector('.jq-media-card');
 }
 
-test('shows Continue Watching only for items with saved progress, and Recently Added for everything else', async () => {
+test('shows Continue Watching only for items with saved progress, and Recently Added for Movies and Series', async () => {
     const browser = await chromium.launch();
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
@@ -32,8 +32,8 @@ test('shows Continue Watching only for items with saved progress, and Recently A
             Array.from(document.querySelectorAll('.jq-home-row-section')[0].querySelectorAll('.jq-media-card'))
                 .map((c) => c.getAttribute('data-item-id'))
         );
-        // Fixture: only movie-1 has playback progress for Alice.
-        assert.deepEqual(continueWatching, ['movie-1']);
+        // Fixture: a Movie and an Episode have playback progress for Alice.
+        assert.deepEqual(continueWatching, ['movie-1', 'episode-516']);
     } finally {
         await browser.close();
     }
@@ -71,7 +71,7 @@ test('a Recently Added row with more than 8 items shows a "See All" that opens t
         const items = await page.evaluate(() =>
             Array.from(document.querySelectorAll('.jq-library-grid .jq-media-card')).map((c) => c.getAttribute('data-item-id'))
         );
-        assert.equal(items.length, 8);
+        assert.equal(items.length, 50);
 
         // "< Back" returns to Home, reachable via Up from the grid.
         await page.evaluate(() => document.querySelector('.jq-back-button').click());
