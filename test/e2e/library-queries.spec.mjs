@@ -103,7 +103,34 @@ test('Search finds Series and Movies but excludes Episodes', async () => withPag
         assert.ok((await ids(page, '.jq-search-results .jq-media-card')).includes(expected));
     }
     await page.locator('.jq-search-input').fill('Northern Journey 516');
-    await page.getByText('No matches.', { exact: true }).waitFor();
+    const message = page.locator('.jq-search-empty');
+    await message.waitFor();
+    assert.equal(await message.textContent(), 'No films or shows match. Episode search isn’t available yet.');
+    await page.evaluate(() => { document.documentElement.style.fontSize = '27px'; });
+    // Search uses px-sized text. Also exercise 69% larger message text as
+    // a conservative fit check, without changing the shipped stylesheet.
+    for (const fontSize of [20, 33.75]) {
+        await message.evaluate((element, size) => { element.style.fontSize = size + 'px'; }, fontSize);
+        await assertPainted(message);
+        const fit = await message.evaluate(element => {
+            const range = document.createRange();
+            range.selectNodeContents(element);
+            const text = range.getBoundingClientRect();
+            const box = element.getBoundingClientRect();
+            const container = element.parentElement.getBoundingClientRect();
+            return {
+                rootFont: getComputedStyle(document.documentElement).fontSize,
+                textFont: getComputedStyle(element).fontSize,
+                fits: element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight &&
+                    text.left >= box.left && text.right <= box.right && text.top >= box.top && text.bottom <= box.bottom &&
+                    box.left >= container.left && box.right <= container.right && box.bottom <= container.bottom &&
+                    text.left >= 0 && text.right <= window.innerWidth && text.top >= 0 && text.bottom <= window.innerHeight
+            };
+        });
+        assert.equal(fit.rootFont, '27px');
+        assert.equal(fit.textFont, fontSize + 'px');
+        assert.equal(fit.fits, true, 'The entire empty-result message must fit its paragraph, container and viewport');
+    }
     assert.equal(await page.locator('.jq-search-results .jq-media-card').count(), 0);
 }));
 
@@ -156,6 +183,21 @@ test('Search paints truncation in its existing message and clears it for a narro
     await page.locator('.jq-search-input').fill('Blue Hour');
     await page.waitForSelector('.jq-search-results [data-item-id="movie-9"]');
     assert.equal(await message.evaluate(element => element.hidden), true);
+}));
+
+test('Search treats zero items with a nonzero total as empty rather than truncated', async () => withPage(async page => {
+    await signIn(page);
+    await page.evaluate(() => {
+        window.ApiClient.getItems = () => Promise.resolve({ Items: [], TotalRecordCount: 99 });
+    });
+    await page.locator('.jq-nav-search').click();
+    await page.locator('.jq-search-input').fill('missing');
+    const message = page.locator('.jq-search-empty');
+    await message.waitFor();
+    assert.doesNotMatch(await message.textContent(), /Showing the first/);
+    assert.equal(await message.textContent(), 'No films or shows match. Episode search isn’t available yet.');
+    await assertPainted(message);
+    assert.equal(await page.locator('.jq-search-results .jq-media-card').count(), 0);
 }));
 
 test('Search omits truncation when TotalRecordCount is absent or not greater than the returned count', async () => withPage(async page => {

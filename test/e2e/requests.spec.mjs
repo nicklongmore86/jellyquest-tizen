@@ -234,8 +234,9 @@ for (const scenario of ['library search', 'library', 'home', 'profiles', 'favori
                     window.ApiClient.getItems = () => Promise.resolve({ Items: [] });
                 });
                 await page.locator('.jq-search-input').fill('no matches');
-                const empty = page.getByText('No matches.', { exact: true });
+                const empty = page.getByText('No films or shows match. Episode search isn’t available yet.', { exact: true });
                 await empty.waitFor({ state: 'visible' });
+                await assertPainted(empty);
                 assert.equal(await empty.evaluate((el) => getComputedStyle(el).color), 'rgb(154, 160, 168)');
             }
             if (scenario === 'home') {
