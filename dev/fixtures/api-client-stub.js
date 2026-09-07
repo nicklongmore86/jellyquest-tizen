@@ -225,7 +225,7 @@
         },
         getItems: function (userId, options) {
             options = options || {};
-            var modeled = ['Recursive', 'ParentId', 'IncludeItemTypes', 'Filters', 'SearchTerm', 'SortBy', 'SortOrder', 'Limit'];
+            var modeled = ['Recursive', 'ParentId', 'IncludeItemTypes', 'Filters', 'SearchTerm', 'SortBy', 'SortOrder', 'StartIndex', 'Limit'];
             Object.keys(options).forEach(function (key) {
                 if (modeled.indexOf(key) === -1) throw new Error('Unmodeled getItems option: ' + key);
             });
@@ -235,6 +235,11 @@
             if (options.SortOrder !== undefined && options.SortOrder !== 'Ascending' && options.SortOrder !== 'Descending') throw new Error('Unmodeled SortOrder');
             if (options.SortOrder && !options.SortBy) throw new Error('SortOrder requires SortBy');
             if (options.Limit !== undefined && (typeof options.Limit !== 'number' || options.Limit < 0 || options.Limit % 1 !== 0)) throw new Error('Unmodeled Limit');
+            // StartIndex is modeled because the Library screen pages with it.
+            // It stays as strict as Limit: the app only ever sends a
+            // non-negative integer, so a string, a float or a negative offset
+            // is still an unmodeled option and still throws.
+            if (options.StartIndex !== undefined && (typeof options.StartIndex !== 'number' || options.StartIndex < 0 || options.StartIndex % 1 !== 0)) throw new Error('Unmodeled StartIndex');
             if (options.SearchTerm !== undefined && typeof options.SearchTerm !== 'string') throw new Error('Unmodeled SearchTerm');
             var types = options.IncludeItemTypes === undefined ? null : options.IncludeItemTypes.split(',');
             if (types) types.forEach(function (type) {
@@ -272,7 +277,12 @@
                 return options.SortOrder === 'Descending' ? -order : order;
             });
             var limit = options && options.Limit;
-            var page = typeof limit === 'number' ? sorted.slice(0, limit) : sorted;
+            // MEASURED against Jellyfin 10.11.11: StartIndex offsets into the
+            // sorted result and TotalRecordCount reports the whole match count,
+            // not the returned page's length. Both are what the Library screen's
+            // paging depends on, so the fixture reproduces that shape.
+            var start = typeof options.StartIndex === 'number' ? options.StartIndex : 0;
+            var page = typeof limit === 'number' ? sorted.slice(start, start + limit) : sorted.slice(start);
             return Promise.resolve({ Items: page.map(projectListFields), TotalRecordCount: sorted.length });
         },
         // The single-item endpoint, and the only place the full BaseItemDto
