@@ -64,11 +64,19 @@
         image.src = url;
     }
 
+    // retryBudget is an optional mutable { failures } object. The Library
+    // passes the same object whenever windowing recreates one item, so a new
+    // card does not reset that screen render's three-attempt cap.
     function observeArtwork(card, item, retryBudget) {
         var source = artworkSource(item);
         // Safely retain text-only cards on hosts without the supported API.
         if (!source || !window.IntersectionObserver) return;
         source.height = item.Type === 'Movie' || item.Type === 'Series' ? 330 : 124;
+        // Once a shared budget reaches three, recreation leaves the card
+        // text-only for the rest of this Library visit even if the network
+        // recovers. A new screen render creates a fresh budget. This matches
+        // the old per-render terminal error, while preventing windowing from
+        // turning every revisit into another request.
         source.retryBudget = retryBudget || null;
         source.failures = retryBudget && retryBudget.failures ? retryBudget.failures : 0;
         source.visible = false;

@@ -2264,11 +2264,19 @@
         image.src = url;
     }
 
+    // retryBudget is an optional mutable { failures } object. The Library
+    // passes the same object whenever windowing recreates one item, so a new
+    // card does not reset that screen render's three-attempt cap.
     function observeArtwork(card, item, retryBudget) {
         var source = artworkSource(item);
         // Safely retain text-only cards on hosts without the supported API.
         if (!source || !window.IntersectionObserver) return;
         source.height = item.Type === 'Movie' || item.Type === 'Series' ? 330 : 124;
+        // Once a shared budget reaches three, recreation leaves the card
+        // text-only for the rest of this Library visit even if the network
+        // recovers. A new screen render creates a fresh budget. This matches
+        // the old per-render terminal error, while preventing windowing from
+        // turning every revisit into another request.
         source.retryBudget = retryBudget || null;
         source.failures = retryBudget && retryBudget.failures ? retryBudget.failures : 0;
         source.visible = false;
@@ -2709,8 +2717,10 @@
 
     var COLUMNS = 4;
     // Twelve complete rows keep the polyfill's O(n) candidate sweep at 48
-    // cards, just under the measured 50-card tier (29-44ms median under the
-    // project's 20x desktop throttle) and far below the 200-card break point.
+    // cards. With 680 items in memory, real posters, the production polyfill,
+    // and 20x CPU throttling, current desktop Chromium measured 48.0ms median
+    // and 91.3ms worst over 100 ArrowDown presses. That desktop result is an
+    // optimistic lower bound, not an M63 or television measurement.
     var WINDOW_SIZE = 48;
     var EDGE_ROWS = 2;
 

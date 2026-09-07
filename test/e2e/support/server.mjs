@@ -41,9 +41,7 @@ export function startServer() {
                     return;
                 }
                 const ext = path.extname(filePath);
-                const headers = { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' };
-                if (requestPath.startsWith('/dev/fixtures/artwork/')) headers['Cache-Control'] = 'public, max-age=3600';
-                res.writeHead(200, headers);
+                res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
                 res.end(data);
             });
         });

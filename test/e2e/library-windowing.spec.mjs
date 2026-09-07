@@ -20,17 +20,14 @@ async function signInAsAlice(page) {
     await page.waitForSelector('.jq-media-card');
 }
 
-async function renderItems(page, count, cardHeight = 330) {
-    await page.addStyleTag({
-        content: `.jq-library-grid .jq-media-card { height: ${cardHeight}px; padding-top: 16px; }`,
-    });
-    await page.evaluate(({ count }) => {
+async function renderItems(page, count, itemType = 'Movie') {
+    await page.evaluate(({ count, itemType }) => {
         const items = [];
         for (let i = 0; i < count; i++) {
             items.push({
                 Id: 'window-' + i,
                 Name: 'Window item ' + i,
-                Type: 'Movie',
+                Type: itemType,
                 ImageTags: { Primary: 'window-tag' },
             });
         }
@@ -51,7 +48,7 @@ async function renderItems(page, count, cardHeight = 330) {
             { title: 'Window test' },
             { onSelectItem() {}, onBack() {} }
         );
-    }, { count });
+    }, { count, itemType });
     await page.waitForSelector('[data-item-id="window-0"]');
 }
 
@@ -89,13 +86,17 @@ async function assertWindow(page) {
     return ids;
 }
 
-for (const cardHeight of [330, 124]) {
-    test(`Library windows 680 items and traverses both directions at 220x${cardHeight}`, async () => {
+// Movie is the real Library case. Episode is deliberately synthetic because
+// the Library query excludes episodes; it exercises the window calculations
+// at the app's other media-card row pitch rather than implying episodes can
+// appear on this screen.
+for (const [itemType, cardHeight] of [['Movie', 410], ['Episode', 204]]) {
+    test(`Library windows 680 ${itemType} items and traverses both directions at 220x${cardHeight}`, async () => {
         const browser = await chromium.launch();
         try {
             const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
             await signInAsAlice(page);
-            await renderItems(page, ITEM_COUNT, cardHeight);
+            await renderItems(page, ITEM_COUNT, itemType);
 
             const geometry = await page.evaluate(() => {
                 const cards = document.querySelectorAll('.jq-library-grid .jq-media-card');
@@ -180,7 +181,7 @@ test('Library card recreation shares the three-attempt artwork retry budget', as
     }
 });
 
-test('Library artwork recreation reuses the cached response without another download', async () => {
+test('Library artwork recreation assigns twice but causes one observed network download', async () => {
     const browser = await chromium.launch();
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });

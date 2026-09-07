@@ -288,7 +288,8 @@ test('Library: ArrowDown reaches the bottom row of a grid taller than the screen
 // has 143px of range, less than the 150px pitch, so the return trip has
 // nothing to strand on and it looks fine however broken the margin is; the
 // same 7 rows at 330px have 1543px of range and stranded on card 17. These
-// use 12 rows within Library's cap and assert the measured scroll range.
+// use 15 rows so traversal crosses the 12-row DOM window in both directions,
+// and assert the measured scroll range.
 //
 // Card heights cover today's 130px .jq-media-card and the 330px poster and
 // 124px still that card artwork introduces. Overriding that height is
@@ -300,7 +301,7 @@ test('Library: ArrowDown reaches the bottom row of a grid taller than the screen
 // and assertMeasuredGeometry() below, which fails the test if the box it
 // depends on is not the box it asked for.
 for (const cardHeight of [130, 330, 124]) {
-    test(`Library: ArrowUp walks a 12-row grid of 220x${cardHeight} cards back to the top`, async () => {
+    test(`Library: ArrowUp walks a windowed 15-row grid of 220x${cardHeight} cards back to the top`, async () => {
         const browser = await chromium.launch();
         const viewport = { width: 1920, height: 1080 };
         try {
@@ -316,12 +317,14 @@ for (const cardHeight of [130, 330, 124]) {
                 content: `.jq-library-grid .jq-media-card { height: ${cardHeight}px; padding-top: 16px; }`,
             });
             // Setup only; every move below is a key press. The fixture
-            // validates the query, and the synthetic response honors its cap.
+            // validates the query. Returning more than its Limit deliberately
+            // models an already-in-memory result large enough to move the
+            // rendering window; pagination remains outside this test.
             await page.evaluate(() => {
                 const items = [];
-                for (let i = 1; i <= 48; i++) items.push({ Id: 'grid-' + i, Name: 'Item ' + i, Type: 'Movie' });
+                for (let i = 1; i <= 60; i++) items.push({ Id: 'grid-' + i, Name: 'Item ' + i, Type: 'Movie' });
                 const getItems = window.ApiClient.getItems;
-                window.ApiClient.getItems = (user, options) => getItems(user, options).then(() => ({ Items: items.slice(0, options.Limit) }));
+                window.ApiClient.getItems = (user, options) => getItems(user, options).then(() => ({ Items: items }));
                 window.JellyQuestLibraryScreen.render(
                     window.JellyQuestShell.getContent(),
                     { title: 'Everything' },
@@ -332,10 +335,11 @@ for (const cardHeight of [130, 330, 124]) {
 
             await assertMeasuredGeometry(page, cardHeight);
 
-            // 48 cards in 4 columns is 12 rows; Down must reach every one.
+            // 60 cards in 4 columns is 15 rows; Down must cross the window
+            // boundary and reach every one.
             const down = await walk(page, 'ArrowDown', viewport);
-            assert.equal(down.length, 12, `ArrowDown must reach all 12 rows, got ${down.join(' -> ')}`);
-            assert.equal(down[down.length - 1], 'grid-45');
+            assert.equal(down.length, 15, `ArrowDown must reach all 15 rows, got ${down.join(' -> ')}`);
+            assert.equal(down[down.length - 1], 'grid-57');
 
             // ...and Up must bring the cursor all the way back, one row per
             // press, ending on "< Back" above the grid with the screen
@@ -343,7 +347,7 @@ for (const cardHeight of [130, 330, 124]) {
             // whole neighbouring row, this stranded at grid-73 with the row
             // above spanning y = -86 to y = 44.
             const up = await walk(page, 'ArrowUp', viewport);
-            assert.deepEqual(up.slice(0, 12), down.slice().reverse(),
+            assert.deepEqual(up.slice(0, 15), down.slice().reverse(),
                 'ArrowUp must retrace every row it came down through');
             assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-back-button')), true,
                 'ArrowUp must finish on "< Back" above the first row');

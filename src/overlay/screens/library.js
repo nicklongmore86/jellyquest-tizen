@@ -8,8 +8,10 @@
 
     var COLUMNS = 4;
     // Twelve complete rows keep the polyfill's O(n) candidate sweep at 48
-    // cards, just under the measured 50-card tier (29-44ms median under the
-    // project's 20x desktop throttle) and far below the 200-card break point.
+    // cards. With 680 items in memory, real posters, the production polyfill,
+    // and 20x CPU throttling, current desktop Chromium measured 48.0ms median
+    // and 91.3ms worst over 100 ArrowDown presses. That desktop result is an
+    // optimistic lower bound, not an M63 or television measurement.
     var WINDOW_SIZE = 48;
     var EDGE_ROWS = 2;
 
