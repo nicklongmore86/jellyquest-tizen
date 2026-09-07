@@ -104,7 +104,7 @@ test('Home and Library use independent media queries and Library reaches beyond 
     assert.ok((await ids(page, '.jq-home-row-section:nth-child(2) .jq-media-card')).includes('series-1'));
     await page.locator('.jq-see-all').click();
     await page.waitForSelector('.jq-library-grid .jq-media-card');
-    assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), 50);
+    assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), 48);
     assert.deepEqual(await page.evaluate(() => window.__queries), [
         { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' },
         { Recursive: true, IncludeItemTypes: 'Movie,Series', SortBy: 'DateCreated', SortOrder: 'Descending', Limit: 8 },

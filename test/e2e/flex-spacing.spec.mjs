@@ -124,11 +124,12 @@ test('library grid retains legacy grid-gap and positive spacing on both axes', a
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
         await openScreen(page, 'library');
         assert.equal(await page.locator('.jq-library-grid').count(), 1);
+        for (let row = 0; row < 12; row++) await page.keyboard.press('ArrowDown');
         const rects = await page.locator('.jq-library-grid > *').evaluateAll((children) => children.map((child) => {
             const { left, right, top, bottom, width, height } = child.getBoundingClientRect();
             return { left, right, top, bottom, width, height };
         }));
-        assert.equal(rects.length, 50, 'Library fixture fills its own bound, including a partial last row');
+        assert.equal(rects.length, 46, 'the final Library window includes the naturally partial last row');
         for (const [i, rect] of rects.entries()) {
             assert.ok(rect.width > 0 && rect.height > 0, 'Library cards must have visible geometry');
             if (i % 4 !== 0) {

@@ -71,7 +71,7 @@ test('a Recently Added row with more than 8 items shows a "See All" that opens t
         const items = await page.evaluate(() =>
             Array.from(document.querySelectorAll('.jq-library-grid .jq-media-card')).map((c) => c.getAttribute('data-item-id'))
         );
-        assert.equal(items.length, 50);
+        assert.equal(items.length, 48);
 
         // "< Back" returns to Home, reachable via Up from the grid.
         await page.evaluate(() => document.querySelector('.jq-back-button').click());
