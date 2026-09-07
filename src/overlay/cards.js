@@ -30,6 +30,9 @@
 
     function failImage(card) {
         card._jqArtwork.failures += 1;
+        if (card._jqArtwork.retryBudget) {
+            card._jqArtwork.retryBudget.failures = card._jqArtwork.failures;
+        }
         card.setAttribute('data-artwork-state', 'error');
         releaseImage(card);
     }
@@ -61,12 +64,21 @@
         image.src = url;
     }
 
-    function observeArtwork(card, item) {
+    // retryBudget is an optional mutable { failures } object. The Library
+    // passes the same object whenever windowing recreates one item, so a new
+    // card does not reset that screen render's three-attempt cap.
+    function observeArtwork(card, item, retryBudget) {
         var source = artworkSource(item);
         // Safely retain text-only cards on hosts without the supported API.
         if (!source || !window.IntersectionObserver) return;
         source.height = item.Type === 'Movie' || item.Type === 'Series' ? 330 : 124;
-        source.failures = 0;
+        // Once a shared budget reaches three, recreation leaves the card
+        // text-only for the rest of this Library visit even if the network
+        // recovers. A new screen render creates a fresh budget. This matches
+        // the old per-render terminal error, while preventing windowing from
+        // turning every revisit into another request.
+        source.retryBudget = retryBudget || null;
+        source.failures = retryBudget && retryBudget.failures ? retryBudget.failures : 0;
         source.visible = false;
         card._jqArtwork = source;
         if (!observer) {
@@ -80,8 +92,12 @@
                             // Retry only on a fresh visit, never on a timer or
                             // another positive threshold. Three failures per
                             // screen render cap persistent Wi-Fi/server errors.
-                            if (artwork.failures < 3) card.removeAttribute('data-artwork-state');
-                            loadImage(card);
+                            if (artwork.failures < 3) {
+                                card.removeAttribute('data-artwork-state');
+                                loadImage(card);
+                            } else {
+                                card.setAttribute('data-artwork-state', 'error');
+                            }
                         }
                     } else {
                         artwork.visible = false;
@@ -145,7 +161,7 @@
         if (options.onSelect) {
             card.addEventListener('click', function () { options.onSelect(item); });
         }
-        observeArtwork(card, item);
+        observeArtwork(card, item, options.artworkRetryBudget);
         return card;
     }
 

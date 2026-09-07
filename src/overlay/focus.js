@@ -50,9 +50,17 @@
     // routes focus through (shell.js, home.js, search.js, library.js,
     // requests.js, profiles.js, detail.js all call focusFirst and nothing
     // else), rather than in each screen that might ever render late.
-    function focusFirst(container) {
+    function focusFirst(container, expectedFocus) {
         if (!container) return false;
         if (activeModal) return activeModal.contains(container) ? focusInto(container) : false;
+        // Async screens may name the element that held focus when their
+        // request began. If the user has moved to another visible control in
+        // the meantime, that selection is newer intent and must win. Keeping
+        // this check in the shared funnel prevents individual screens from
+        // growing subtly different definitions of "real focus".
+        if (arguments.length > 1
+            && document.activeElement !== expectedFocus
+            && hasVisibleFocus()) return false;
         if (focusInto(container)) return true;
         // Nothing in the screen could take focus. That is a real state, not a
         // bug: an empty Jellyfin library gives Home no cards at all, only a
