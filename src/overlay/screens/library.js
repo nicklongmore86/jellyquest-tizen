@@ -129,9 +129,16 @@
         rowPitch = measureRowPitch();
         updatePadding();
 
-        // Focus has already landed on the target when this runs. Exchange
-        // rows only from the opposite edges, leaving that exact focused node
-        // attached throughout the synchronous update.
+        // INVARIANT: moveWindow() must keep the focused index inside
+        // [nextStart, nextEnd), so its node stays attached throughout the
+        // synchronous update. Re-check this if WINDOW_SIZE, COLUMNS,
+        // EDGE_ROWS, either trigger threshold, or the +/- COLUMNS step changes.
+        // With today's 48/4/2 values, a down move requires
+        // index >= windowEnd - 8 = windowStart + 40, while nextStart is only
+        // windowStart + 4. An up move requires index < windowStart + 8, while
+        // nextEnd is (windowStart - 4) + 48 = windowStart + 44. Thus neither
+        // edge-removal loop can include the focused index. This is guaranteed
+        // by that arithmetic, not by a runtime assertion.
         grid.addEventListener('focus', function (event) {
             var focused = event.target;
             var index = focused._jqLibraryIndex;

@@ -124,6 +124,26 @@ test('library grid retains legacy grid-gap and positive spacing on both axes', a
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
         await openScreen(page, 'library');
         assert.equal(await page.locator('.jq-library-grid').count(), 1);
+        {
+            const rects = await page.locator('.jq-library-grid > *').evaluateAll((children) => children.map((child) => {
+                const { left, right, top, bottom, width, height } = child.getBoundingClientRect();
+                return { left, right, top, bottom, width, height };
+            }));
+            assert.equal(rects.length, 48, 'the initial Library window contains 12 complete rows');
+            for (const [i, rect] of rects.entries()) {
+                assert.ok(rect.width > 0 && rect.height > 0, 'Library cards must have visible geometry');
+                if (i % 4 !== 0) {
+                    assert.ok(Math.abs(rect.top - rects[i - 1].top) < 1, 'Four cards must share each line');
+                    const separation = rect.left - rects[i - 1].right;
+                    assert.ok(separation > 0, `Library x separation ${separation}px must be positive`);
+                }
+                if (i >= 4) {
+                    assert.ok(Math.abs(rect.left - rects[i - 4].left) < 1, 'Library columns must align');
+                    const separation = rect.top - rects[i - 4].bottom;
+                    assert.ok(separation > 0, `Library y separation ${separation}px must be positive`);
+                }
+            }
+        }
         for (let row = 0; row < 12; row++) await page.keyboard.press('ArrowDown');
         const rects = await page.locator('.jq-library-grid > *').evaluateAll((children) => children.map((child) => {
             const { left, right, top, bottom, width, height } = child.getBoundingClientRect();
