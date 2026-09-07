@@ -225,7 +225,7 @@
         },
         getItems: function (userId, options) {
             options = options || {};
-            var modeled = ['Recursive', 'ParentId', 'IncludeItemTypes', 'Filters', 'SearchTerm', 'SortBy', 'SortOrder', 'Limit'];
+            var modeled = ['Recursive', 'ParentId', 'IncludeItemTypes', 'Filters', 'SearchTerm', 'SortBy', 'SortOrder', 'StartIndex', 'Limit'];
             Object.keys(options).forEach(function (key) {
                 if (modeled.indexOf(key) === -1) throw new Error('Unmodeled getItems option: ' + key);
             });
@@ -235,6 +235,11 @@
             if (options.SortOrder !== undefined && options.SortOrder !== 'Ascending' && options.SortOrder !== 'Descending') throw new Error('Unmodeled SortOrder');
             if (options.SortOrder && !options.SortBy) throw new Error('SortOrder requires SortBy');
             if (options.Limit !== undefined && (typeof options.Limit !== 'number' || options.Limit < 0 || options.Limit % 1 !== 0)) throw new Error('Unmodeled Limit');
+            // StartIndex is modeled because the Library screen pages with it.
+            // It stays as strict as Limit: the app only ever sends a
+            // non-negative integer, so a string, a float or a negative offset
+            // is still an unmodeled option and still throws.
+            if (options.StartIndex !== undefined && (typeof options.StartIndex !== 'number' || options.StartIndex < 0 || options.StartIndex % 1 !== 0)) throw new Error('Unmodeled StartIndex');
             if (options.SearchTerm !== undefined && typeof options.SearchTerm !== 'string') throw new Error('Unmodeled SearchTerm');
             var types = options.IncludeItemTypes === undefined ? null : options.IncludeItemTypes.split(',');
             if (types) types.forEach(function (type) {
@@ -272,7 +277,26 @@
                 return options.SortOrder === 'Descending' ? -order : order;
             });
             var limit = options && options.Limit;
-            var page = typeof limit === 'number' ? sorted.slice(0, limit) : sorted;
+            // MEASURED against Jellyfin 10.11.11: an EXPLICIT StartIndex
+            // offsets into the sorted result -- two full sweeps of all 680
+            // movies across 14 pages returned 680 collected / 680 distinct /
+            // identical order, matching a single 2500-item reference fetch.
+            //
+            // INFERRED, not measured: that TotalRecordCount reports the whole
+            // match count rather than the returned page's length. It is how
+            // jellyfin-web reads the field and what the Search screen's
+            // truncation message already assumed before this change, but no
+            // probe here established it.
+            //
+            // CONVENTIONAL, not measured: that an OMITTED StartIndex means
+            // zero. The server's OpenAPI document marks startIndex optional
+            // with no specified default, and an attempt to probe the live
+            // server for it returned 401. The fixture defaults it to zero
+            // because that is the near-universal convention for an offset
+            // parameter -- and nothing in the app relies on it, because
+            // library.js always sends a numeric StartIndex.
+            var start = typeof options.StartIndex === 'number' ? options.StartIndex : 0;
+            var page = typeof limit === 'number' ? sorted.slice(start, start + limit) : sorted.slice(start);
             return Promise.resolve({ Items: page.map(projectListFields), TotalRecordCount: sorted.length });
         },
         // The single-item endpoint, and the only place the full BaseItemDto

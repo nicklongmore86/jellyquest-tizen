@@ -34,3 +34,24 @@
     color: #9aa0a8;
     font-size: 22px;
 }
+
+/* A page fetch can fail while the grid is scrolled arbitrarily deep, and the
+   windowed grid carries its off-screen rows as padding -- so an in-flow
+   message after the grid lands below hundreds of virtual rows and is never
+   seen. Fixed to the viewport instead, which is the only position that is
+   visible wherever the cursor happens to be. #jellyquest-root is itself
+   `position: fixed` and app.css resets transform/filter/perspective/contain
+   on html/body, so nothing in the chain establishes a containing block and
+   this positions against the real viewport. Longhands only: `inset` is
+   measured-unsupported on the Tizen 5.0 / M63 floor (see app.css). */
+.jq-library-paging-status {
+    position: fixed;
+    left: 48px;
+    bottom: 48px;
+    margin: 0;
+    padding: 16px 24px;
+    border-radius: 8px;
+    background: #1c2026;
+    color: #ff6b6b;
+    font-size: 22px;
+}

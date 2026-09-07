@@ -83,7 +83,29 @@ test('fixture models root views, recursive and parent scope, type filters, bound
     assert.equal(remoteOnly.LocalTrailerCount, 0);
     assert.equal(remoteOnly.RemoteTrailers.length, 1);
 
-    for (const query of [{ StartIndex: 1 }, { Fields: 'Overview' }, { Filters: 'IsFavorite' }, { SortBy: 'Name' }, { Recursive: 'true' }, { ParentId: 'unknown' }, { IncludeItemTypes: 'Audio' }]) {
+    // StartIndex used to be in the rejection list below. The Library screen
+    // now sends it, so the fixture models it -- and modelling it means
+    // reproducing what the real server does with it, asserted here. The
+    // rejection list keeps every option the app still never sends, plus the
+    // StartIndex SHAPES it never sends: strictness moved, it did not loosen.
+    const paged = [];
+    for (let start = 0; start < 54; start += 20) {
+        const page = await api.getItems('user-alice', { Recursive: true, IncludeItemTypes: 'Movie,Series', SortBy: 'DateCreated', SortOrder: 'Descending', StartIndex: start, Limit: 20 });
+        assert.equal(page.TotalRecordCount, 54, 'TotalRecordCount must report the whole match count, not the page');
+        paged.push(...page.Items.map(item => item.Id));
+    }
+    // Array.from, not .map: Items is built inside the vm context, so .map
+    // returns an array on THAT realm's Array.prototype and deepStrictEqual
+    // rejects it against a test-realm array however equal the contents are.
+    const unpaged = Array.from((await api.getItems('user-alice', { Recursive: true, IncludeItemTypes: 'Movie,Series', SortBy: 'DateCreated', SortOrder: 'Descending' })).Items, item => item.Id);
+    assert.equal(paged.length, 54);
+    assert.deepEqual(paged, unpaged, 'paged reads must reassemble the unpaged order');
+    assert.equal(new Set(paged).size, 54);
+    assert.equal((await api.getItems('user-alice', { Recursive: true, IncludeItemTypes: 'Movie,Series', StartIndex: 54, Limit: 20 })).Items.length, 0,
+        'a StartIndex at the end of the result returns an empty page');
+
+    for (const query of [{ Fields: 'Overview' }, { Filters: 'IsFavorite' }, { SortBy: 'Name' }, { Recursive: 'true' }, { ParentId: 'unknown' }, { IncludeItemTypes: 'Audio' },
+        { StartIndex: '1' }, { StartIndex: 1.5 }, { StartIndex: -1 }, { StartIndex: null }]) {
         assert.throws(() => api.getItems('user-alice', query), /Unmodeled/);
     }
 });
@@ -108,7 +130,7 @@ test('Home and Library use independent media queries and Library reaches beyond 
     assert.deepEqual(await page.evaluate(() => window.__queries), [
         { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' },
         { Recursive: true, IncludeItemTypes: 'Movie,Series', SortBy: 'DateCreated', SortOrder: 'Descending', Limit: 8 },
-        { Recursive: true, IncludeItemTypes: 'Movie,Series', SortBy: 'DateCreated', SortOrder: 'Descending', Limit: 50 }
+        { Recursive: true, IncludeItemTypes: 'Movie,Series', SortBy: 'DateCreated', SortOrder: 'Descending', StartIndex: 0, Limit: 96 }
     ]);
 }));
 

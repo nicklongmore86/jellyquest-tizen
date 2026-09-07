@@ -362,6 +362,14 @@
     window.JellyQuestFocus = {
         ready: ready,
         focusFirst: focusFirst,
+        // The same reveal the capture listener below performs, exposed for
+        // the one case that changes what needs revealing WITHOUT changing
+        // what has focus: the Library mounting a newly-paged row beneath the
+        // cursor. No focus event fires for that, so the scroll that makes the
+        // new row visible -- and therefore reachable by the polyfill, which
+        // will not move to a candidate it cannot see -- has to be asked for.
+        // It moves scroll offsets only; it never moves the cursor.
+        reveal: revealFocus,
         setFallbackContainer: setFallbackContainer,
         openModal: openModal,
         closeModal: closeModal,
