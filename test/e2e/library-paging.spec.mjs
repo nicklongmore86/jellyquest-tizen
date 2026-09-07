@@ -57,11 +57,15 @@ async function signInAsAlice(page) {
 //               'short' returns 20 items, 'empty' returns none, 'oneItem'
 //               returns a single item. 'duplicateOnce'/'shortOnce' apply only
 //               to the second response and then behave normally.
+//   yieldPlan   response sizes cycled from the second response on, so a
+//               server can oscillate between page sizes
+//   growingTotal report a TotalRecordCount that is always ahead of what has
+//               been served, so it can never be reached
 async function renderPaged(page, options) {
     const config = Object.assign({
         total: ITEM_COUNT, itemType: 'Movie', overlap: 0,
         omitTotal: false, holdFrom: null, failFrom: null,
-        totalSays: null, contradict: null,
+        totalSays: null, contradict: null, yieldPlan: null, growingTotal: false,
     }, options);
     await page.evaluate((config) => {
         const items = [];
@@ -107,8 +111,13 @@ async function renderPaged(page, options) {
                     served = items.slice(from, from + 1);
                 }
             }
+            if (config.yieldPlan && nth > 1) {
+                served = items.slice(from, from + config.yieldPlan[(nth - 2) % config.yieldPlan.length]);
+            }
             const body = { Items: served };
-            if (!config.omitTotal) {
+            if (config.growingTotal) {
+                body.TotalRecordCount = from + served.length + 500;
+            } else if (!config.omitTotal) {
                 body.TotalRecordCount = config.totalSays === null ? items.length : config.totalSays;
             }
             if (window.__failNext !== null && start >= window.__failNext) {
@@ -775,6 +784,82 @@ test('a server returning one item per page is bounded by the request ceiling', a
         // server refuses to do.
         const requests = await page.evaluate(() => window.__pageRequests.length);
         assert.equal(requests, 17, `bounded at ${requests} responses`);
+    } finally {
+        await browser.close();
+    }
+});
+
+// ---- What the request bounds actually cover -----------------------------
+//
+// The ratio ceiling binds exactly when the average yield falls below
+// PAGE_SIZE / MAX_REQUEST_RATIO = 24 new items per response, and never above
+// it at any library size. A server yielding just OVER that line therefore
+// slips past it, and if its TotalRecordCount also keeps growing, the
+// short-page stop can never fire either. MEASURED before the count was
+// latched: 163 responses, offsets out to 4041, after 1,000 ArrowDown presses.
+//
+// The count is now latched from the first response that supplies one, which
+// bounds that shape by the server's own opening claim. These two tests are the
+// pair: the pathological server must be bounded, and the legitimate large one
+// must NOT be -- a guard that closed the first by truncating the second would
+// be worse than the defect.
+test('a server oscillating short pages behind a growing TotalRecordCount is bounded by the latched count', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        page.setDefaultTimeout(5000);
+        await signInAsAlice(page);
+        // Item supply far larger than the bound, so a regression shows up as a
+        // rising request count rather than as the fixture simply running out.
+        await renderPaged(page, { total: 8000, yieldPlan: [24, 25], growingTotal: true });
+
+        const visited = await walkToEnd(page);
+        const requests = await page.evaluate(() => window.__pageRequests.length);
+        // MEASURED: 22 with the latch, 163 without it under the same probe.
+        assert.equal(requests, 22, `bounded at ${requests} responses`);
+        assert.equal(new Set(visited).size, visited.length, 'no row may be visited twice');
+
+        // The harm this shape does is traffic, not a broken screen: it must
+        // still be usable, still bounded at WINDOW_SIZE, still focus-safe.
+        const focus = await focusSnapshot(page);
+        assert.equal(focus.body, false);
+        assert.equal(focus.attached, true);
+        assert.equal(focus.painted, true);
+        await assertWindow(page);
+    } finally {
+        await browser.close();
+    }
+});
+
+test('a legitimate 5,000-item server returning full pages is not truncated by any guard', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        page.setDefaultTimeout(5000);
+        await signInAsAlice(page);
+        await renderPaged(page, { total: 5000 });
+
+        // 5,000 items in 4 columns is 1,250 rows. Pressing without reading
+        // focus back each time keeps this to ~2s; the assertions below would
+        // fail loudly if any press had been dropped or any page had lagged.
+        const rows = 5000 / COLUMNS;
+        for (let row = 1; row < rows; row++) await page.keyboard.press('ArrowDown');
+
+        const state = await page.evaluate(() => ({
+            focus: document.activeElement.dataset.itemId,
+            requests: window.__pageRequests.length,
+            mounted: document.querySelectorAll('.jq-library-grid .jq-media-card').length,
+            max: window.__maxLibraryCards,
+        }));
+        assert.equal(state.focus, 'page-4996',
+            'every one of the 1,250 rows must be reachable by remote');
+        // 53 responses is well past MINIMUM_PAGE_REQUESTS (16), so this also
+        // demonstrates that the floor under the ratio ceiling does not bind on
+        // a library that legitimately needs more requests than it.
+        assert.equal(state.requests, Math.ceil(5000 / PAGE_SIZE),
+            `a full-page server must need exactly ceil(5000 / PAGE_SIZE) responses, took ${state.requests}`);
+        assert.equal(state.mounted, WINDOW_SIZE);
+        assert.equal(state.max, WINDOW_SIZE, 'the mounted bound must hold across 53 pages');
     } finally {
         await browser.close();
     }

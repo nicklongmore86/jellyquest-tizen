@@ -61,32 +61,73 @@
     // this only stops a held-down arrow from hammering a failing server.
     var RETRY_COOLDOWN_MS = 2000;
 
-    // ---- Guards against a server that never lets paging finish ----------
+    // ---- What the paging guards do and do not bound ---------------------
     //
-    // TotalRecordCount is a HINT, not a contract (see appendPage). Trusting a
-    // contradiction in either direction is how a library silently truncates,
-    // so the stop conditions there are progress-based instead, and these
-    // constants bound the pathological cases progress alone cannot.
+    // READ THIS BEFORE TREATING ANY OF IT AS A GUARANTEE. An earlier revision
+    // of this comment called the ceiling below "a hard guard against unbounded
+    // requests". It is not one, and cannot be: a server delivering new items
+    // steadily is indistinguishable from a large real library, so any absolute
+    // request cap would truncate a legitimate library to close a hypothetical
+    // one. What follows is what is actually bounded, stated exactly.
     //
-    // MAX_BARREN_PAGES: consecutive pages that contribute no new item. A page
-    // whose items are all already held has still advanced the raw offset, so
-    // continuing cannot loop on one offset -- but a server repeating pages
-    // forever would still never finish. Three consecutive is 288 item slots of
-    // zero progress, far beyond any plausible boundary overlap, which can only
-    // repeat items across ADJACENT pages. INFERRED: no measurement of a
-    // misbehaving server exists.
+    // BOUNDED:
+    //   * A response that cannot advance the offset at all -- an empty page.
+    //     Stopped immediately; nothing else can make progress from there.
+    //   * A server repeating pages: MAX_BARREN_PAGES consecutive responses
+    //     that add no new item.
+    //   * A server making negligible progress: the ratio ceiling below binds
+    //     when the average yield falls under PAGE_SIZE / MAX_REQUEST_RATIO,
+    //     i.e. 24 new items per response. MEASURED: a server alternating
+    //     1- and 20-item pages stops after 17 responses.
+    //   * A TotalRecordCount that keeps moving the goalposts. The count is
+    //     LATCHED from the first response that supplies one (see appendPage),
+    //     so a total that grows on every response cannot indefinitely defer
+    //     the short-page stop. MEASURED: a server alternating 24- and 25-item
+    //     pages with a continually growing total ran to 163 responses without
+    //     the latch and stops after 22 with it.
+    //
+    // NOT BOUNDED, deliberately:
+    //   * A server that keeps returning full pages of new items. That is what
+    //     a large library looks like, and bounding it would truncate one.
+    //     MEASURED: a 5,000-item server returning full pages reaches all 5,000
+    //     in 53 responses, which no guard here interferes with.
+    //   * A server whose FIRST response already claims a huge
+    //     TotalRecordCount and then yields at least 24 new items per response
+    //     indefinitely. The latch bounds the count to that first claim, not to
+    //     any absolute figure. Requests remain strictly user-paced -- one in
+    //     flight, only ever issued from a focus move inside the trigger zone,
+    //     roughly one per four to six rows scrolled -- so this costs traffic
+    //     proportional to how far the viewer actually scrolls, not a runaway
+    //     loop. INFERRED: the real server returns full pages, so this shape
+    //     has never been observed.
+    //
+    // KNOWN TRUNCATION RISK, accepted: the ratio ceiling would cut short a
+    // server whose own page cap is below 24 items while its library is much
+    // larger. INFERRED, never observed -- the measured server honours Limit.
+    // It is recorded here rather than guarded against, because every guard
+    // that would close it also truncates some legitimate library.
+
+    // Consecutive responses that contribute no new item. A page whose items
+    // are all already held has still advanced the raw offset, so continuing
+    // cannot loop on one offset -- but a server repeating pages forever would
+    // never finish. Three consecutive is 288 item slots of zero progress. In a
+    // stable ordering, boundary overlap repeats items only across ADJACENT
+    // pages, so three is far beyond it; under an unstable ordering that is not
+    // guaranteed. INFERRED: a conservative choice, not a measured threshold --
+    // no measurement of a misbehaving server exists.
     var MAX_BARREN_PAGES = 3;
     // A floor under the request ceiling below. 16 responses is 1536 item
     // slots, more than twice the measured 714-item library, so the floor
     // cannot bind on any library resembling the measured one.
     var MINIMUM_PAGE_REQUESTS = 16;
-    // How many times the IDEAL number of requests a server may take before
-    // paging gives up. The ceiling is computed from what has actually been
-    // fetched rather than being a flat constant, because a flat constant would
-    // silently truncate a library legitimately larger than it: when every page
-    // is full this ratio is 1 and the ceiling never binds at any library size,
-    // and it only closes in when responses are pathologically short. It bounds
-    // INEFFICIENCY, not library size.
+    // How many times the ideal number of requests a server may take before
+    // paging gives up. Computed from what has actually been fetched rather
+    // than being a flat constant, because a flat constant would truncate a
+    // library legitimately larger than it. MEASURED arithmetic: this binds
+    // exactly when the average yield drops below PAGE_SIZE / MAX_REQUEST_RATIO
+    // = 24 new items per response, and never binds above it at any library
+    // size. It bounds INEFFICIENCY, not library size -- and, as set out above,
+    // it therefore does not bound request count in absolute terms.
     var MAX_REQUEST_RATIO = 4;
 
     // callbacks: { onSelectItem(item), onBack() }
@@ -201,16 +242,27 @@
             fetchedCount += received.length;
             pageResponses++;
             barrenPages = added === 0 ? barrenPages + 1 : 0;
-            if (result && typeof result.TotalRecordCount === 'number') {
+            // LATCHED, not refreshed. A count that grows on every response
+            // otherwise moves the goalposts forever: fetchedCount can never
+            // catch it, so the short-page stop never fires and paging runs as
+            // long as the viewer keeps scrolling. Taking the first count the
+            // server supplies bounds that by its own opening claim. It also
+            // gives the screen a coherent meaning -- it pages the library as
+            // it was when the screen opened -- rather than chasing a target
+            // that moves underneath the cursor.
+            if (totalRecordCount === null && result && typeof result.TotalRecordCount === 'number') {
                 totalRecordCount = result.TotalRecordCount;
             }
 
             // ---- When to stop asking ------------------------------------
             //
-            // TotalRecordCount is a hint. MEASURED on the household's server,
-            // it reports the whole match count and the pages agree with it --
-            // but a response can contradict it in either direction, and an
-            // earlier revision stopped on ANY duplicate-only or short page,
+            // TotalRecordCount is a hint. INFERRED, not measured: that it
+            // reports the whole match count rather than the returned page's
+            // length -- that is how jellyfin-web reads the field and what the
+            // Search screen already assumed, but no probe here established it,
+            // and an earlier revision of this comment wrongly called it
+            // MEASURED. A response can contradict it in either direction, and
+            // an earlier revision stopped on ANY duplicate-only or short page,
             // which silently presented a partial library as the whole one: a
             // single repeated page truncated 300 items to 96.
             //
@@ -259,9 +311,16 @@
                 // moved the cursor somewhere else entirely, and
                 // asynchronous-completion-beats-newer-intent is this repo's
                 // recurring cursor-loss bug. Appending is focus-neutral by
-                // construction: extendWindowForward() below can only ADD
-                // trailing cards (see the INVARIANT note), no appended card is
-                // marked [data-jq-autofocus], and nothing calls .focus().
+                // construction. extendWindowForward() below does mutate the
+                // grid -- moveWindow() removes the cards that fall below the
+                // new nextStart before appending the trailing ones, so this is
+                // not an append-only operation, and an earlier revision of
+                // this comment wrongly said it was. What makes it focus-safe
+                // is the INVARIANT note's arithmetic: the focused index is
+                // provably outside BOTH removal ranges, so the focused node is
+                // never one of the cards removed. No appended card is marked
+                // [data-jq-autofocus], and nothing on this path calls
+                // .focus().
                 updatePadding();
                 if (extendWindowForward(focusedIndex())) {
                     // Mounting the row is not enough to make it reachable. The
@@ -393,6 +452,12 @@
         // removal range. One step is enough to unstick downward traversal: the
         // row below the focused card is at most index + COLUMNS <=
         // windowStart + 51, which is inside the new [nextStart, nextEnd).
+        //
+        // Note that it is NOT an append-only operation: moveWindow() removes
+        // the COLUMNS cards that fall below the new nextStart before appending
+        // the trailing ones. That is safe for the reason above -- the focused
+        // index is provably outside that removal range -- not because nothing
+        // is removed.
         //
         // It cannot raise the mounted-card bound either: nextEnd is capped at
         // nextStart + WINDOW_SIZE regardless of how many pages were fetched.
