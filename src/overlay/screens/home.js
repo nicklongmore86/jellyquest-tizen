@@ -9,6 +9,7 @@
         container.innerHTML = '';
         container.className = 'jq-home-screen';
 
+        var focusAtRequest = document.activeElement;
         var userId = window.ApiClient.getCurrentUserId();
         var rows = [
             {
@@ -51,7 +52,7 @@
                 container.appendChild(empty);
             }
             if (firstCard) firstCard.setAttribute('data-jq-autofocus', '');
-            window.JellyQuestFocus.focusFirst(container);
+            window.JellyQuestFocus.focusFirst(container, focusAtRequest);
         });
     }
 

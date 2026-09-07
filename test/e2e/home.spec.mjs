@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
+import { assertPainted } from './support/paint.mjs';
 import { startServer } from './support/server.mjs';
 
 const server = await startServer();
@@ -14,6 +15,30 @@ async function signInAsAlice(page) {
     await page.waitForSelector('.jq-profile-card');
     await page.keyboard.press('Enter');
     await page.waitForSelector('.jq-shell');
+    await page.waitForSelector('.jq-media-card');
+}
+
+async function beginDelayedHomeSignIn(page) {
+    await page.goto(simulatorUrl);
+    await page.waitForSelector('.jq-profile-card');
+    await page.evaluate(() => {
+        const getItems = window.ApiClient.getItems;
+        window.__releaseHomeRows = [];
+        window.ApiClient.getItems = function () {
+            const receiver = this;
+            const args = arguments;
+            return new Promise((resolve) => {
+                window.__releaseHomeRows.push(() => resolve(getItems.apply(receiver, args)));
+            });
+        };
+    });
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.jq-shell');
+    await page.waitForFunction(() => window.__releaseHomeRows.length === 2);
+}
+
+async function releaseHomeRows(page) {
+    await page.evaluate(() => window.__releaseHomeRows.splice(0).forEach((release) => release()));
     await page.waitForSelector('.jq-media-card');
 }
 
@@ -53,6 +78,44 @@ test('autofocuses the first card, and arrow keys move within and between rows', 
 
         await page.keyboard.press('ArrowUp');
         assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-1');
+    } finally {
+        await browser.close();
+    }
+});
+
+test('a delayed Home render preserves a newer rendered rail selection', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await beginDelayedHomeSignIn(page);
+
+        await page.keyboard.press('ArrowDown');
+        await page.keyboard.press('ArrowDown');
+        assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-nav-search')), true,
+            'the delayed-response precondition must leave a real selection on Search');
+        await assertPainted(page.locator(':focus'));
+
+        await releaseHomeRows(page);
+
+        assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-nav-search')), true,
+            'late Home completion must not override the newer Search selection');
+        await assertPainted(page.locator(':focus'));
+    } finally {
+        await browser.close();
+    }
+});
+
+test('a delayed Home render still autofocuses its first card without newer user input', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await beginDelayedHomeSignIn(page);
+
+        await releaseHomeRows(page);
+
+        assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-1',
+            'Home must keep its ordinary first-card autofocus when focus has not moved');
+        await assertPainted(page.locator(':focus'));
     } finally {
         await browser.close();
     }
