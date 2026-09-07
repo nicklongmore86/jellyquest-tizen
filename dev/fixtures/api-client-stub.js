@@ -277,10 +277,24 @@
                 return options.SortOrder === 'Descending' ? -order : order;
             });
             var limit = options && options.Limit;
-            // MEASURED against Jellyfin 10.11.11: StartIndex offsets into the
-            // sorted result and TotalRecordCount reports the whole match count,
-            // not the returned page's length. Both are what the Library screen's
-            // paging depends on, so the fixture reproduces that shape.
+            // MEASURED against Jellyfin 10.11.11: an EXPLICIT StartIndex
+            // offsets into the sorted result -- two full sweeps of all 680
+            // movies across 14 pages returned 680 collected / 680 distinct /
+            // identical order, matching a single 2500-item reference fetch.
+            //
+            // INFERRED, not measured: that TotalRecordCount reports the whole
+            // match count rather than the returned page's length. It is how
+            // jellyfin-web reads the field and what the Search screen's
+            // truncation message already assumed before this change, but no
+            // probe here established it.
+            //
+            // CONVENTIONAL, not measured: that an OMITTED StartIndex means
+            // zero. The server's OpenAPI document marks startIndex optional
+            // with no specified default, and an attempt to probe the live
+            // server for it returned 401. The fixture defaults it to zero
+            // because that is the near-universal convention for an offset
+            // parameter -- and nothing in the app relies on it, because
+            // library.js always sends a numeric StartIndex.
             var start = typeof options.StartIndex === 'number' ? options.StartIndex : 0;
             var page = typeof limit === 'number' ? sorted.slice(start, start + limit) : sorted.slice(start);
             return Promise.resolve({ Items: page.map(projectListFields), TotalRecordCount: sorted.length });

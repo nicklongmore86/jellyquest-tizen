@@ -2117,6 +2117,14 @@
     window.JellyQuestFocus = {
         ready: ready,
         focusFirst: focusFirst,
+        // The same reveal the capture listener below performs, exposed for
+        // the one case that changes what needs revealing WITHOUT changing
+        // what has focus: the Library mounting a newly-paged row beneath the
+        // cursor. No focus event fires for that, so the scroll that makes the
+        // new row visible -- and therefore reachable by the polyfill, which
+        // will not move to a candidate it cannot see -- has to be asked for.
+        // It moves scroll offsets only; it never moves the cursor.
+        reveal: revealFocus,
         setFallbackContainer: setFallbackContainer,
         openModal: openModal,
         closeModal: closeModal,
@@ -2749,8 +2757,16 @@
     // headroom, and at the 48.0ms median ~0.58s. INFERRED, not measured: no
     // figure for this server's page latency over the TV's own network exists,
     // so this is a headroom budget, not a proof the page always wins the race.
-    // If it loses, the cursor simply stops at the last loaded row until the
-    // page lands; nothing breaks, and the trigger fires again.
+    //
+    // If it loses, the cursor stops at the last loaded row until the page
+    // lands, AND THEN HAS TO BE UNSTUCK. An earlier revision of this comment
+    // claimed the cursor simply resumes; that was false and shipped a bug. A
+    // full window's upper bound does not grow when items are appended
+    // (nextEnd is capped at nextStart + WINDOW_SIZE), so the arriving page
+    // mounted no new row, ArrowDown had no candidate, no focus event fired,
+    // and downward traversal was stuck until the user happened to press Left
+    // or Right. requestNextPage() therefore re-runs the forward window test
+    // itself once a page lands -- see extendWindowForward().
     //
     // The pre-rebuild overlay used Limit 70 with a prefetch at 14 cards
     // remaining. That is prior art, not a spec: 14 is under four rows, which
@@ -2761,6 +2777,34 @@
     // is still user-initiated (the next focus move inside the trigger zone);
     // this only stops a held-down arrow from hammering a failing server.
     var RETRY_COOLDOWN_MS = 2000;
+
+    // ---- Guards against a server that never lets paging finish ----------
+    //
+    // TotalRecordCount is a HINT, not a contract (see appendPage). Trusting a
+    // contradiction in either direction is how a library silently truncates,
+    // so the stop conditions there are progress-based instead, and these
+    // constants bound the pathological cases progress alone cannot.
+    //
+    // MAX_BARREN_PAGES: consecutive pages that contribute no new item. A page
+    // whose items are all already held has still advanced the raw offset, so
+    // continuing cannot loop on one offset -- but a server repeating pages
+    // forever would still never finish. Three consecutive is 288 item slots of
+    // zero progress, far beyond any plausible boundary overlap, which can only
+    // repeat items across ADJACENT pages. INFERRED: no measurement of a
+    // misbehaving server exists.
+    var MAX_BARREN_PAGES = 3;
+    // A floor under the request ceiling below. 16 responses is 1536 item
+    // slots, more than twice the measured 714-item library, so the floor
+    // cannot bind on any library resembling the measured one.
+    var MINIMUM_PAGE_REQUESTS = 16;
+    // How many times the IDEAL number of requests a server may take before
+    // paging gives up. The ceiling is computed from what has actually been
+    // fetched rather than being a flat constant, because a flat constant would
+    // silently truncate a library legitimately larger than it: when every page
+    // is full this ratio is 1 and the ceiling never binds at any library size,
+    // and it only closes in when responses are pathologically short. It bounds
+    // INEFFICIENCY, not library size.
+    var MAX_REQUEST_RATIO = 4;
 
     // callbacks: { onSelectItem(item), onBack() }
     function renderLibrary(container, row, callbacks) {
@@ -2846,6 +2890,8 @@
         var pendingPage = false;
         var exhausted = false;
         var lastFailureAt = 0;
+        var pageResponses = 0;
+        var barrenPages = 0;
 
         var windowStart = 0;
         var windowEnd = 0;
@@ -2870,18 +2916,50 @@
                 added++;
             }
             fetchedCount += received.length;
+            pageResponses++;
+            barrenPages = added === 0 ? barrenPages + 1 : 0;
             if (result && typeof result.TotalRecordCount === 'number') {
                 totalRecordCount = result.TotalRecordCount;
             }
-            // Stop on the server's own count when it gives one, on a short or
-            // empty page, and on a page that contributed nothing new -- the
-            // last is the only remaining way to make no progress, and looping
-            // on it would re-request the same offset indefinitely.
-            if (!received.length || added === 0
-                || received.length < PAGE_SIZE
-                || (totalRecordCount !== null && fetchedCount >= totalRecordCount)) {
+
+            // ---- When to stop asking ------------------------------------
+            //
+            // TotalRecordCount is a hint. MEASURED on the household's server,
+            // it reports the whole match count and the pages agree with it --
+            // but a response can contradict it in either direction, and an
+            // earlier revision stopped on ANY duplicate-only or short page,
+            // which silently presented a partial library as the whole one: a
+            // single repeated page truncated 300 items to 96.
+            //
+            // Only an EMPTY page genuinely blocks progress, because only an
+            // empty page fails to advance the raw offset; every non-empty
+            // response moves StartIndex on, so asking again is a NEW offset,
+            // not the same one. (An earlier comment here claimed otherwise.
+            // It was wrong: fetchedCount advances by the RAW response length.)
+            var shortPage = received.length < PAGE_SIZE;
+            var reachedClaimedTotal = totalRecordCount !== null && fetchedCount >= totalRecordCount;
+            if (!received.length) {
+                // No offset progress is possible; asking again would repeat
+                // this exact request forever.
+                exhausted = true;
+            } else if (shortPage && (reachedClaimedTotal || totalRecordCount === null)) {
+                // The ordinary end: a short final page, agreed on by the
+                // server's own count -- or, when it gave no count, the short
+                // page is the only end-signal there is.
+                exhausted = true;
+            } else if (barrenPages >= MAX_BARREN_PAGES) {
+                exhausted = true;
+            } else if (pageResponses > Math.max(MINIMUM_PAGE_REQUESTS,
+                Math.ceil(fetchedCount / PAGE_SIZE) * MAX_REQUEST_RATIO)) {
                 exhausted = true;
             }
+            // Everything else keeps going: a full page while the count says
+            // more remain, a short page while it says more remain, a
+            // duplicate-only page, and a page that overruns an understated
+            // count. Dedup keeps a repeat from being mounted twice; it cannot
+            // recover an item the server SKIPPED, and nothing here pretends
+            // otherwise -- a skipped range stays missing and the reachable
+            // count simply ends up below TotalRecordCount.
         }
 
         function requestNextPage() {
@@ -2898,17 +2976,49 @@
                 // moved the cursor somewhere else entirely, and
                 // asynchronous-completion-beats-newer-intent is this repo's
                 // recurring cursor-loss bug. Appending is focus-neutral by
-                // construction: moveWindow(windowStart) below removes nothing
-                // (see the INVARIANT note), no appended card is marked
-                // [data-jq-autofocus], and nothing calls .focus().
+                // construction: extendWindowForward() below can only ADD
+                // trailing cards (see the INVARIANT note), no appended card is
+                // marked [data-jq-autofocus], and nothing calls .focus().
                 updatePadding();
-                moveWindow(windowStart);
+                if (extendWindowForward(focusedIndex())) {
+                    // Mounting the row is not enough to make it reachable. The
+                    // polyfill will not move to a candidate it cannot see, and
+                    // the cursor was sitting on what was, until this page
+                    // landed, the last row -- so the screen is scrolled to its
+                    // old end and the new row is just past the bottom edge.
+                    // Nothing re-runs the scroll reveal, because no focus
+                    // event fired. Ask for it explicitly. This moves scroll
+                    // offsets only; it does not move the cursor.
+                    window.JellyQuestFocus.reveal(document.activeElement);
+                }
             }).catch(function (error) {
                 pendingPage = false;
                 lastFailureAt = Date.now();
                 pagingStatus.hidden = false;
                 console.error('[JellyQuest] Library page failed:', error);
             });
+        }
+
+        // The index of the card the cursor is on, or null if the cursor is
+        // not on a card of THIS grid -- on the rail, on "< Back", or on a
+        // screen that has since replaced this one.
+        function focusedIndex() {
+            var active = document.activeElement;
+            if (!active || !grid.contains(active)) return null;
+            return typeof active._jqLibraryIndex === 'number' ? active._jqLibraryIndex : null;
+        }
+
+        // The forward half of the window trigger, shared by the focus listener
+        // and by a page landing. Extracted rather than duplicated so the two
+        // callers cannot drift apart -- the INVARIANT below is stated in terms
+        // of exactly this arithmetic.
+        function extendWindowForward(index) {
+            if (index === null) return false;
+            if (index >= windowEnd - EDGE_ROWS * COLUMNS && windowEnd < items.length) {
+                moveWindow(windowStart + COLUMNS);
+                return true;
+            }
+            return false;
         }
 
         function createCard(index) {
@@ -2992,20 +3102,29 @@
         // by that arithmetic, not by a runtime assertion.
         //
         // Paging adds one more caller: requestNextPage() calls
-        // moveWindow(windowStart). nextStart === windowStart there, so the
-        // removal loop's lower bound is unchanged and its upper bound only
-        // GROWS (items.length grew) -- it removes nothing at all, and the
-        // window still mounts at most WINDOW_SIZE cards because nextEnd is
-        // capped at nextStart + WINDOW_SIZE regardless of how many pages have
-        // been fetched.
+        // extendWindowForward(focusedIndex()) when a page lands. That is the
+        // SAME test and the SAME +COLUMNS step as the down branch below, so
+        // the arithmetic above covers it unchanged -- the focused index is
+        // >= windowStart + 40 when it fires, nextStart is windowStart + 4, and
+        // nextEnd is windowStart + 52, so the focused card is in neither
+        // removal range. One step is enough to unstick downward traversal: the
+        // row below the focused card is at most index + COLUMNS <=
+        // windowStart + 51, which is inside the new [nextStart, nextEnd).
+        //
+        // It cannot raise the mounted-card bound either: nextEnd is capped at
+        // nextStart + WINDOW_SIZE regardless of how many pages were fetched.
+        //
+        // Only the FORWARD branch runs on a page landing. An append adds items
+        // at the END, so it can never make an item behind the cursor newly
+        // available, and running the backward branch would mutate the DOM for
+        // no reason the user asked for.
         grid.addEventListener('focus', function (event) {
             var focused = event.target;
             var index = focused._jqLibraryIndex;
             if (typeof index !== 'number') return;
             if (index >= items.length - PREFETCH_REMAINING) requestNextPage();
-            if (index >= windowEnd - EDGE_ROWS * COLUMNS && windowEnd < items.length) {
-                moveWindow(windowStart + COLUMNS);
-            } else if (index < windowStart + EDGE_ROWS * COLUMNS && windowStart > 0) {
+            if (extendWindowForward(index)) return;
+            if (index < windowStart + EDGE_ROWS * COLUMNS && windowStart > 0) {
                 moveWindow(windowStart - COLUMNS);
             }
         }, true);

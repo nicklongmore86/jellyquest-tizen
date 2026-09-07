@@ -50,10 +50,18 @@ async function signInAsAlice(page) {
 //   omitTotal   drop TotalRecordCount, so exhaustion rests on a short page
 //   holdFrom    StartIndex from which responses are held until released
 //   failFrom    StartIndex from which responses reject
+//   totalSays   report this TotalRecordCount instead of the real one, so a
+//               response can CONTRADICT the count in either direction
+//   contradict  a response shape that disagrees with the count, applied from
+//               the second response on: 'duplicate' re-serves the first page,
+//               'short' returns 20 items, 'empty' returns none, 'oneItem'
+//               returns a single item. 'duplicateOnce'/'shortOnce' apply only
+//               to the second response and then behave normally.
 async function renderPaged(page, options) {
     const config = Object.assign({
         total: ITEM_COUNT, itemType: 'Movie', overlap: 0,
         omitTotal: false, holdFrom: null, failFrom: null,
+        totalSays: null, contradict: null,
     }, options);
     await page.evaluate((config) => {
         const items = [];
@@ -73,15 +81,36 @@ async function renderPaged(page, options) {
             // Let the strict fixture reject an unmodelled option for real.
             real(user, requested);
             window.__pageRequests.push({ StartIndex: requested.StartIndex, Limit: requested.Limit });
-            // A real Jellyfin server defaults a missing StartIndex to 0, and
-            // so does this. Without that, a screen that sends no StartIndex
-            // would fail every test below at setup with an empty first page,
-            // hiding which behaviour each one actually checks.
+            // CONVENTIONAL, not measured: an omitted StartIndex is treated
+            // as zero. The server's OpenAPI document marks startIndex
+            // optional with no specified default, and a probe of the live
+            // server for it returned 401 -- so this is the usual convention
+            // for an offset parameter, not an observed behaviour. It is here
+            // only so that a screen sending no StartIndex fails each test
+            // below on the behaviour that test checks, rather than failing
+            // all of them at setup with an empty first page. Production never
+            // depends on it: library.js always sends a numeric StartIndex.
             const start = requested.StartIndex || 0;
             // A repeated boundary: re-serve `overlap` items already returned.
             const from = start === 0 ? 0 : Math.max(0, start - config.overlap);
-            const body = { Items: items.slice(from, from + requested.Limit) };
-            if (!config.omitTotal) body.TotalRecordCount = items.length;
+            let served = items.slice(from, from + requested.Limit);
+            const nth = window.__pageRequests.length;
+            const only = config.contradict === 'duplicateOnce' || config.contradict === 'shortOnce';
+            if (nth > 1 && (!only || nth === 2)) {
+                if (config.contradict === 'duplicate' || config.contradict === 'duplicateOnce') {
+                    served = items.slice(0, requested.Limit);
+                } else if (config.contradict === 'short' || config.contradict === 'shortOnce') {
+                    served = items.slice(from, from + 20);
+                } else if (config.contradict === 'empty') {
+                    served = [];
+                } else if (config.contradict === 'oneItem') {
+                    served = items.slice(from, from + 1);
+                }
+            }
+            const body = { Items: served };
+            if (!config.omitTotal) {
+                body.TotalRecordCount = config.totalSays === null ? items.length : config.totalSays;
+            }
             if (window.__failNext !== null && start >= window.__failNext) {
                 return Promise.reject(new Error('page fetch failed'));
             }
@@ -576,6 +605,176 @@ test('exhaustion rests on a short page when the server omits TotalRecordCount', 
             { StartIndex: 0, Limit: PAGE_SIZE },
             { StartIndex: PAGE_SIZE, Limit: PAGE_SIZE },
         ]);
+    } finally {
+        await browser.close();
+    }
+});
+
+// ---- Regression: a page landing while the cursor is AT the boundary ------
+//
+// This is the case the two held-response tests above do not reach. They
+// release page 2 with the cursor on the rail or mid-page, where the window's
+// upper bound still has room to grow. With the cursor on the LAST LOADED ROW
+// the window is full, so appending items does not raise nextEnd -- the next
+// row was never mounted, ArrowDown had no candidate, no focus event fired,
+// and downward traversal was stuck until the user happened to press Left or
+// Right. Mounting the row is also not sufficient on its own: the polyfill
+// will not move to a candidate it cannot see, and the screen is scrolled to
+// what was the end, so the reveal has to be re-run too.
+test('a page landing while the cursor sits on the last loaded row unsticks ArrowDown', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        page.setDefaultTimeout(5000);
+        await signInAsAlice(page);
+        await renderPaged(page, { total: 300, holdFrom: PAGE_SIZE });
+
+        // Walk to the last row of page 1: items 0..95, so row 23, index 92.
+        const lastLoadedRow = PAGE_SIZE / COLUMNS - 1;
+        for (let row = 1; row <= lastLoadedRow; row++) await page.keyboard.press('ArrowDown');
+        assert.equal((await focusSnapshot(page)).id, 'page-' + lastLoadedRow * COLUMNS);
+        assert.equal(await page.evaluate(() => window.__held.length), 1,
+            'page 2 must be in flight, held, with the cursor already at the boundary');
+        assert.equal(await page.locator(`[data-item-id="page-${PAGE_SIZE}"]`).count(), 0);
+
+        // Waiting at the boundary is the honest state while the page is in
+        // flight: there is genuinely nothing below to move to.
+        assert.equal(await pressAndAssertFocus(page, 'ArrowDown'), 'page-' + lastLoadedRow * COLUMNS);
+
+        const paddingBefore = await gridPaddingBottom(page);
+        await page.evaluate(() => window.__held[0]());
+        await waitForAppendedPage(page, paddingBefore);
+
+        // The landing page must not have moved the cursor...
+        assert.equal((await focusSnapshot(page)).id, 'page-' + lastLoadedRow * COLUMNS,
+            'the arriving page must not move the cursor');
+        // ...and the very next ArrowDown must advance, with NO lateral move
+        // needed to unstick it.
+        assert.equal(await pressAndAssertFocus(page, 'ArrowDown'), 'page-' + PAGE_SIZE,
+            'ArrowDown must advance into the newly paged row without a lateral move first');
+        assert.equal(await pressAndAssertFocus(page, 'ArrowDown'), 'page-' + (PAGE_SIZE + COLUMNS));
+        await assertWindow(page);
+    } finally {
+        await browser.close();
+    }
+});
+
+// ---- Regression: responses that contradict TotalRecordCount -------------
+//
+// TotalRecordCount is a hint. An earlier revision stopped paging on ANY
+// duplicate-only or short page, so a single contradictory response silently
+// presented a partial library as the whole one. Only an EMPTY page genuinely
+// blocks progress: every non-empty response advances the raw offset, so
+// asking again is a new offset, not a repeat of the same one.
+//
+// `visited` is the full column-0 descent, so its length is the number of rows
+// the remote can actually reach and its entries are in item order.
+async function walkToEnd(page) {
+    const visited = [(await focusSnapshot(page)).id];
+    for (let step = 0; step < 400; step++) {
+        await page.keyboard.press('ArrowDown');
+        const id = (await focusSnapshot(page)).id;
+        if (id === visited[visited.length - 1]) break;
+        visited.push(id);
+    }
+    return visited;
+}
+
+for (const [label, options, expected] of [
+    // The server re-serves page 1 as page 2, i.e. it SKIPS items 96..191.
+    // Dedup mounts each Id once; it cannot recover the skipped range, and
+    // this asserts exactly that -- browsing continues past the gap and the
+    // gap stays a gap.
+    ['a duplicate-only page', { total: 300, contradict: 'duplicateOnce' },
+        { requests: [0, 96, 192, 288], rows: 51, boundary: [23, 'page-92', 'page-192'] }],
+    // A short page while the count still says more remain.
+    ['a short but positive page', { total: 300, contradict: 'shortOnce' },
+        { requests: [0, 96, 116, 212], rows: 75, boundary: [24, 'page-96', 'page-100'] }],
+    // An understated count, overrun by the very first response.
+    ['an understated TotalRecordCount', { total: 300, totalSays: 50 },
+        { requests: [0, 96, 192, 288], rows: 75 }],
+    // An overstated count: the run past the real end returns empty and stops.
+    ['an overstated TotalRecordCount', { total: 300, totalSays: 900 },
+        { requests: [0, 96, 192, 288, 300], rows: 75 }],
+    // No count at all: the short page is the only end-signal there is.
+    ['no TotalRecordCount at all', { total: 300, omitTotal: true },
+        { requests: [0, 96, 192, 288], rows: 75 }],
+]) {
+    test(`${label} must not silently truncate the library`, async () => {
+        const browser = await chromium.launch();
+        try {
+            const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+            page.setDefaultTimeout(5000);
+            await signInAsAlice(page);
+            await renderPaged(page, options);
+
+            const visited = await walkToEnd(page);
+            assert.deepEqual(await page.evaluate(() => window.__pageRequests.map((r) => r.StartIndex)),
+                expected.requests, 'request offsets');
+            assert.equal(visited.length, expected.rows, `rows reachable by remote: ${visited.length}`);
+            assert.equal(new Set(visited).size, visited.length, 'no row may be visited twice');
+            if (expected.boundary) {
+                const [index, before, after] = expected.boundary;
+                assert.equal(visited[index], before);
+                // What the server actually returned next -- NOT a recovery of
+                // anything it skipped.
+                assert.equal(visited[index + 1], after);
+            }
+            await assertWindow(page);
+        } finally {
+            await browser.close();
+        }
+    });
+}
+
+test('an empty page stops paging, because only an empty page cannot advance the offset', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        page.setDefaultTimeout(5000);
+        await signInAsAlice(page);
+        await renderPaged(page, { total: 300, contradict: 'empty' });
+        const visited = await walkToEnd(page);
+        assert.deepEqual(await page.evaluate(() => window.__pageRequests.map((r) => r.StartIndex)), [0, 96],
+            'an empty response must not be re-requested at the same offset');
+        assert.equal(visited.length, PAGE_SIZE / COLUMNS,
+            'browsing stops at the first page, which is the honest limit of what arrived');
+    } finally {
+        await browser.close();
+    }
+});
+
+test('a server that repeats every page stops after MAX_BARREN_PAGES', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        page.setDefaultTimeout(5000);
+        await signInAsAlice(page);
+        await renderPaged(page, { total: 300, contradict: 'duplicate' });
+        await walkToEnd(page);
+        // One good page, then three consecutive pages adding nothing new.
+        assert.deepEqual(await page.evaluate(() => window.__pageRequests.map((r) => r.StartIndex)),
+            [0, 96, 192, 288]);
+    } finally {
+        await browser.close();
+    }
+});
+
+test('a server returning one item per page is bounded by the request ceiling', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        page.setDefaultTimeout(5000);
+        await signInAsAlice(page);
+        await renderPaged(page, { total: 300, contradict: 'oneItem' });
+        await walkToEnd(page);
+        // Each response advances the offset by one, so nothing loops -- but
+        // nothing finishes either. MINIMUM_PAGE_REQUESTS (16) is the floor
+        // that binds here: the ratio ceiling only exceeds it once enough
+        // items have actually been fetched, which is precisely what this
+        // server refuses to do.
+        const requests = await page.evaluate(() => window.__pageRequests.length);
+        assert.equal(requests, 17, `bounded at ${requests} responses`);
     } finally {
         await browser.close();
     }
