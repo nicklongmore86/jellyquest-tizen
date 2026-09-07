@@ -65,6 +65,24 @@ test('fixture models root views, recursive and parent scope, type filters, bound
     const episodes = all.filter(item => item.Type === 'Episode');
     assert.equal(episodes.filter(item => item.ParentBackdropImageTags.length).length, 699);
     assert.ok(episodes.every(item => item.SeriesId && item.SeriesName && item.ParentIndexNumber && item.IndexNumber && item.ParentBackdropItemId));
+    // The other direction of the same principle as the option guard below:
+    // the fixture must not RETURN fields the real server does not. MEASURED
+    // against Jellyfin 10.11.11, a list response carries none of these; the
+    // single-item endpoint carries all of them with no Fields parameter.
+    const detailOnly = ['Overview', 'LocalTrailerCount', 'MediaStreams', 'MediaSources', 'RemoteTrailers'];
+    for (const item of all) {
+        for (const field of detailOnly) {
+            assert.ok(!(field in item), `getItems must not return ${field} (${item.Id})`);
+        }
+    }
+    const fullMovie = await api.getItem('user-alice', 'movie-1');
+    assert.ok(fullMovie.Overview);
+    assert.equal(fullMovie.LocalTrailerCount, 1);
+    assert.equal(fullMovie.MediaStreams.filter(stream => stream.Type === 'Audio').length, 2);
+    const remoteOnly = await api.getItem('user-alice', 'movie-2');
+    assert.equal(remoteOnly.LocalTrailerCount, 0);
+    assert.equal(remoteOnly.RemoteTrailers.length, 1);
+
     for (const query of [{ StartIndex: 1 }, { Fields: 'Overview' }, { Filters: 'IsFavorite' }, { SortBy: 'Name' }, { Recursive: 'true' }, { ParentId: 'unknown' }, { IncludeItemTypes: 'Audio' }]) {
         assert.throws(() => api.getItems('user-alice', query), /Unmodeled/);
     }

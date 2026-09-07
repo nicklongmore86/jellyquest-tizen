@@ -56,6 +56,57 @@
             playingVideo = true;
             return Promise.resolve();
         },
+        // Real: playbackmanager.js's self.playTrailers
+        // (playbackmanager.js:3891-3925). Modelled here because Detail's
+        // Trailer action now calls it instead of assembling a play() call
+        // itself (app.js's onPlayTrailer).
+        //
+        // Two branches, and the difference between them is the whole reason
+        // Detail's trailer gate is local-only:
+        //
+        //   LocalTrailerCount > 0 -- getLocalTrailers() returns real
+        //   BaseItemDto trailer items, which go to play() as `items`.
+        //
+        //   the LOCAL LOOKUP CAME BACK EMPTY -- and this is the branch that
+        //   matters, because it is NOT an else. Upstream's condition is
+        //   `if (!items?.length)`, not `if (!item.LocalTrailerCount)`, so a
+        //   stale LocalTrailerCount falls straight through to RemoteTrailers,
+        //   which become Id-less pseudo-items carrying a Url and get
+        //   dispatched by canPlayUrl to the YouTube IFrame plugin.
+        //
+        // This stub used to short-circuit on LocalTrailerCount and resolve
+        // after play({ items: [] }) in BOTH cases, which made the two
+        // outcomes indistinguishable and hid a real bug in app.js: JellyQuest
+        // was handing over the full item, RemoteTrailers included, so an
+        // empty local lookup silently reached the remote path. Same shape of
+        // fixture-fidelity failure PR #20 and PR #22 fixed -- a stub more
+        // permissive than the real thing. Transcribed from
+        // playbackmanager.js:3898-3925 rather than paraphrased.
+        //
+        // With neither, it rejects with NO ARGUMENT (playbackmanager.js:3924)
+        // -- reproduced exactly, so a caller that dereferences the rejection
+        // value fails here rather than on the television.
+        playTrailers: function (item) {
+            var apiClient = window.ApiClient;
+            var lookup = item.LocalTrailerCount
+                ? apiClient.getLocalTrailers(apiClient.getCurrentUserId(), item.Id)
+                : Promise.resolve(null);
+            return lookup.then(function (items) {
+                if (!items || !items.length) {
+                    items = (item.RemoteTrailers || []).map(function (trailer) {
+                        return {
+                            Name: trailer.Name || (item.Name + ' Trailer'),
+                            Url: trailer.Url,
+                            MediaType: 'Video',
+                            Type: 'Trailer',
+                            ServerId: apiClient.serverId(),
+                        };
+                    });
+                }
+                if (items.length) return window.playbackManager.play({ items: items });
+                return Promise.reject();
+            });
+        },
         // Real: playbackmanager.js's self.isPlayingVideo (via
         // isPlayingMediaType('Video')). app.js's Back handler asks this
         // before deciding whether to consume the key or leave it to

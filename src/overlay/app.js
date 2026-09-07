@@ -148,6 +148,61 @@
         }
     }
 
+    // ---- Trailers: making "local only" actually local only ---------------
+    //
+    // Detail offers a Trailer action only for LocalTrailerCount > 0 (see the
+    // gate in detail.js). Handing upstream the full item does NOT make the
+    // resulting PLAYBACK local-only, which is a different thing and was the
+    // bug here.
+    //
+    // MEASURED in the pinned build (.jellyfin-web-ref 35c0793,
+    // playbackmanager.js:3903-3916): playTrailers() falls back to remote
+    // trailers whenever the LOCAL LOOKUP comes back empty, regardless of
+    // LocalTrailerCount --
+    //
+    //     if (item.LocalTrailerCount) { items = await apiClient.getLocalTrailers(...); }
+    //     if (!items?.length) { items = (item.RemoteTrailers || []).map(...); }
+    //
+    // So a film whose LocalTrailerCount is stale, or whose local trailer has
+    // since been removed, would silently launch the YouTube embed: exactly
+    // the outcome the local-only gate exists to prevent, on a file:// origin
+    // where it is inferred to fail, behind an opaque overlay, with no console
+    // and only a remote.
+    //
+    // The fix takes its guarantee from the INPUT rather than from that
+    // branch: an item carrying no RemoteTrailers gives the fallback nothing
+    // to build a remote pseudo-item out of, because the item handed in is
+    // that method's only source of remote URLs.
+    //
+    // Be exact about how far that is established. VERIFIED by execution
+    // against the PINNED local-player implementation (.jellyfin-web-ref
+    // 35c0793): with RemoteTrailers stripped, an empty or null local lookup
+    // rejects without reaching playback, successful local playback is
+    // unaffected, and getLocalTrailers offers no other item field or
+    // failure-path URL to fall back to. That is a statement about THIS ref,
+    // not about however upstream might be written in future -- a ref bump
+    // must re-verify it. Stripping the input is simply the strongest defence
+    // available from this side of the call: it does not depend on which
+    // branch upstream takes, only on there being no remote data to take.
+    //
+    // Out of scope and deliberately unmodelled: the active-player delegation
+    // at playbackmanager.js:3894 (`if (player?.playTrailers) return
+    // player.playTrailers(item)`) hands the whole item to a cast target
+    // before any of the above runs. JellyQuest has no cast UI, so that
+    // branch is unreachable in the supported app flow and the stub does not
+    // model it -- for the same reason dev/fixtures/playback-manager-stub.js
+    // declines to model remote-player delegation in play().
+    //
+    // A shallow copy, so the caller's item -- the one Detail still holds and
+    // paints from -- is left untouched.
+    function localTrailersOnly(item) {
+        var copy = {};
+        Object.keys(item).forEach(function (key) {
+            if (key !== 'RemoteTrailers') copy[key] = item[key];
+        });
+        return copy;
+    }
+
     function showDetail(item, returnTo) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
@@ -178,16 +233,36 @@
             onPlay: function (playItem, startPositionTicks) {
                 return requestPlayback(playItem, { ids: [playItem.Id], startPositionTicks: startPositionTicks });
             },
+            // Trailers go through jellyfin-web's own playTrailers()
+            // (playbackmanager.js:3891-3925) rather than requestPlayback(),
+            // on an item stripped of RemoteTrailers -- see
+            // localTrailersOnly() above for why that stripping is what makes
+            // the local-only decision real.
+            //
+            // Guarded by typeof rather than called directly: playbackManager
+            // is jellyfin-web's global, created by this project's build-time
+            // patch (scripts/patch-jellyfin-web.mjs), and a missing one must
+            // surface as Detail's visible failure state rather than a
+            // TypeError inside a click handler.
+            //
+            // The rejection is passed through unclassified, deliberately.
+            // playTrailers() rejects with NO ARGUMENT when it found nothing
+            // to play (playbackmanager.js:3924), and it is tempting to read
+            // that as "no trailer available" -- but MEASURED, a bare
+            // Promise.reject() is not a unique signal: the pinned build has
+            // NINE of them, and at least two are reachable from inside this
+            // very call. playInternal() rejects bare after
+            // showPlaybackInfoErrorMessage(self, 'PlaybackErrorPlaceHolder')
+            // (playbackmanager.js:2348-2351) and again for NO_MEDIA_ERROR
+            // (playbackmanager.js:2301-2302). Nothing in the pinned upstream
+            // distinguishes "there was no trailer" from "playing it failed",
+            // so Detail must not claim to know which happened.
             onPlayTrailer: function (playItem) {
-                var userId = window.ApiClient.getCurrentUserId();
-                return window.ApiClient.getLocalTrailers(userId, playItem.Id).then(function (trailers) {
-                    if (!trailers.length) return false;
-                    // The trailer is its own item, so its own ServerId is the
-                    // right one to send.
-                    return requestPlayback(trailers[0], { ids: [trailers[0].Id] }).then(function () {
-                        return true;
-                    });
-                });
+                var manager = window.playbackManager;
+                if (!manager || typeof manager.playTrailers !== 'function') {
+                    return Promise.reject(new Error('playbackManager.playTrailers is unavailable.'));
+                }
+                return Promise.resolve(manager.playTrailers(localTrailersOnly(playItem)));
             },
         });
     }

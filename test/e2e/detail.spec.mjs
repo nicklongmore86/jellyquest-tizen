@@ -1,8 +1,16 @@
 // Detail/playback screen (see docs/rebuild-plan.md, Phase 3 and
 // DETAIL_ACTIONS.md). Covers the movie actions this pass implements:
-// Resume/Play, Start Over, Trailer, My List, and the conditional More
-// menu -- including reintroducing .jq-modal/contain-mode coverage that
-// lapsed when the Phase 1 spike (focus.spec.mjs) was retired in Phase 2.
+// Resume/Play, Start Over, Trailer and My List, plus the on-demand fetch
+// of the FULL item that the synopsis and the Trailer button depend on.
+//
+// The fetch is the point of most of what follows. Everything that reaches
+// Detail came from a getItems() LIST query, and a list response carries no
+// Overview, no LocalTrailerCount and no MediaStreams (measured against the
+// household's Jellyfin 10.11.11 server; dev/fixtures/api-client-stub.js now
+// models that). So these specs deliberately separate the FIRST PAINT, built
+// synchronously from the list item, from the ENRICHMENT that patches it --
+// and hold the getItem() response open to assert the first paint on its own,
+// rather than racing it.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -13,41 +21,305 @@ const server = await startServer();
 const simulatorUrl = `${server.baseUrl}/dev/simulator.html`;
 test.after(() => server.close());
 
-async function openDetail(page, itemId) {
+// Holds every ApiClient.getItem() call open until the spec releases it, so
+// the pre-enrichment paint is observable instead of a race. Installed after
+// sign-in and before the card click, because only Detail calls getItem().
+async function holdEnrichment(page) {
+    await page.evaluate(() => {
+        const getItem = window.ApiClient.getItem.bind(window.ApiClient);
+        window.__realGetItem = getItem; // unwrapped, for specs that need to look at the full item
+        window.__heldItems = [];
+        window.ApiClient.getItem = function (userId, itemId) {
+            return new Promise((resolve, reject) => {
+                window.__heldItems.push({
+                    itemId,
+                    release: () => getItem(userId, itemId).then(resolve, reject),
+                    fail: () => reject(new Error('detail fetch failed')),
+                });
+            });
+        };
+    });
+}
+
+const releaseEnrichment = (page) => page.evaluate(() => window.__heldItems.splice(0).forEach((held) => held.release()));
+const failEnrichment = (page) => page.evaluate(() => window.__heldItems.splice(0).forEach((held) => held.fail()));
+
+const actionLabels = (page) => page.evaluate(
+    () => Array.from(document.querySelectorAll('.jq-detail-action')).map((button) => button.textContent));
+
+async function signIn(page) {
     await page.goto(simulatorUrl);
     await page.waitForSelector('.jq-profile-card');
     await page.keyboard.press('Enter'); // Alice
     await page.waitForSelector('.jq-media-card');
+}
+
+// movie-2 is not on Home (it is neither in progress nor recently added), so
+// specs that need it go through the Library grid, which holds all 50.
+async function openLibrary(page) {
+    await page.evaluate(() => document.querySelector('.jq-see-all').click());
+    await page.waitForSelector('.jq-library-grid .jq-media-card');
+}
+
+async function openItem(page, itemId) {
     await page.evaluate((id) => document.querySelector(`[data-item-id="${id}"]`).click(), itemId);
     await page.waitForSelector('.jq-detail-screen');
 }
 
-test('a resumable item with a trailer and multiple tracks shows the full action set', async () => {
+async function openDetail(page, itemId, beforeOpen) {
+    await signIn(page);
+    if (beforeOpen) await beforeOpen(page);
+    await openItem(page, itemId);
+}
+
+// Every spec below that walks the action row waits for enrichment to settle
+// first, and then names its target with getByRole rather than counting
+// ArrowRight presses -- the row's length changes mid-life now, so a fixed
+// walk would encode the pre-enrichment length and break for a reason that
+// has nothing to do with what the spec is about.
+const button = (page, name) => page.getByRole('button', { name, exact: true });
+
+test('the synopsis and the Trailer button are absent from the list item and appear only after the full item loads', async () => {
     const browser = await chromium.launch();
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-        await openDetail(page, 'movie-1');
+        await openDetail(page, 'movie-1', holdEnrichment);
 
-        assert.deepEqual(
-            await page.evaluate(() => Array.from(document.querySelectorAll('.jq-detail-action')).map((b) => b.textContent)),
-            ['Resume', 'Start Over', 'Trailer', 'Add to My List', 'More']
-        );
+        // First paint: everything the list DTO can support, and nothing else.
+        assert.deepEqual(await actionLabels(page), ['Resume', 'Start Over', 'Add to My List']);
+        assert.equal(await page.locator('.jq-detail-overview').count(), 0);
         assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Resume');
+        // ... and exactly one fetch for it, not one per action.
+        assert.deepEqual(await page.evaluate(() => window.__heldItems.map((held) => held.itemId)), ['movie-1']);
+
+        await releaseEnrichment(page);
+        await button(page, 'Trailer').waitFor();
+
+        assert.deepEqual(await actionLabels(page), ['Resume', 'Start Over', 'Trailer', 'Add to My List']);
+        const overview = page.locator('.jq-detail-overview');
+        assert.match(await overview.textContent(), /supply run north/);
+        await assertPainted(overview);
     } finally {
         await browser.close();
     }
 });
 
-test('an item with no progress, no trailer, and no extra tracks shows just Play and My List', async () => {
+// This used to be "an item with no progress, no trailer, and no extra tracks
+// shows just Play and My List", pointed at movie-9 -- which passed for the
+// wrong reason: movie-9 has no Overview/LocalTrailerCount in the fixture at
+// all, so it would go on passing against a Detail screen whose fetch was
+// completely broken. It is re-pointed at movie-2, which DOES have both on
+// getItem(), so the absence before enrichment and the presence after are
+// each a real assertion -- and movie-2 is the RemoteTrailers-only film, so
+// the same spec pins JellyQuest's deliberately local-only trailer gate.
+test('a RemoteTrailers-only film gains its synopsis but never a Trailer button', async () => {
     const browser = await chromium.launch();
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-        await openDetail(page, 'movie-9'); // Blue Hour: no UserData progress, no trailer, no MediaStreams
+        await openDetail(page, 'movie-2', async (target) => {
+            await openLibrary(target);
+            await holdEnrichment(target);
+        });
 
-        assert.deepEqual(
-            await page.evaluate(() => Array.from(document.querySelectorAll('.jq-detail-action')).map((b) => b.textContent)),
-            ['Play', 'Add to My List']
-        );
+        assert.deepEqual(await actionLabels(page), ['Play', 'Add to My List']);
+        assert.equal(await page.locator('.jq-detail-overview').count(), 0);
+
+        // The full item really does carry what upstream jellyfin-web would
+        // gate on -- so no Trailer button below is a decision, not missing data.
+        const full = await page.evaluate(() => window.__realGetItem('user-alice', 'movie-2'));
+        assert.equal(full.LocalTrailerCount, 0);
+        assert.equal(full.RemoteTrailers.length, 1);
+
+        await releaseEnrichment(page);
+        await page.waitForSelector('.jq-detail-overview');
+
+        assert.match(await page.locator('.jq-detail-overview').textContent(), /transmission/);
+        // Upstream jellyfin-web WOULD offer a Trailer here
+        // (LocalTrailerCount || RemoteTrailers?.length). JellyQuest does not
+        // -- see the gate comment in src/overlay/screens/detail.js.
+        assert.deepEqual(await actionLabels(page), ['Play', 'Add to My List']);
+        assert.equal(await button(page, 'Trailer').count(), 0);
+    } finally {
+        await browser.close();
+    }
+});
+
+test('the More button is not rendered, even for an item with multiple audio and subtitle tracks', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openDetail(page, 'movie-1'); // the only fixture item with multiple tracks
+        await button(page, 'Trailer').waitFor(); // enrichment settled
+
+        // MediaStreams reached the screen -- this is not "the data was
+        // missing", it is "the control is deliberately withheld".
+        assert.ok(await page.evaluate(async () => {
+            const full = await window.ApiClient.getItem(window.ApiClient.getCurrentUserId(), 'movie-1');
+            return full.MediaStreams.filter((stream) => stream.Type === 'Audio').length > 1;
+        }));
+        assert.equal(await button(page, 'More').count(), 0);
+        assert.equal(await page.locator('.jq-playback-options').count(), 0);
+    } finally {
+        await browser.close();
+    }
+});
+
+test('enrichment leaves focus exactly where the user put it', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openDetail(page, 'movie-1', holdEnrichment);
+
+        // Move off the autofocused action while the fetch is still in flight.
+        await page.keyboard.press('ArrowRight');
+        assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Start Over');
+
+        await releaseEnrichment(page);
+        await button(page, 'Trailer').waitFor();
+
+        // The patch must not re-focus. focus.js's activeModal/hasVisibleFocus
+        // guards would probably absorb a stray focusFirst() -- they are a
+        // safety net, not the design, so assert the design.
+        assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Start Over');
+        // And the row is patched, not rebuilt: Right still reaches the new
+        // button rather than dead-ending on a replaced node.
+        await page.keyboard.press('ArrowRight');
+        assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Trailer');
+    } finally {
+        await browser.close();
+    }
+});
+
+test('a late response for a superseded render is discarded, even when it is the same item', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        const consoleErrors = [];
+        page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
+        await openDetail(page, 'movie-1', holdEnrichment);
+
+        // Re-enter Detail for the SAME item. The shell hands every screen the
+        // same <main> node (shell.js:55,66), so nothing about the container
+        // distinguishes these two renders -- only a node this render created.
+        await page.evaluate(() => document.querySelector('.jq-nav-home').click());
+        await page.waitForSelector('.jq-media-card');
+        await openItem(page, 'movie-1');
+
+        assert.equal(await page.evaluate(() => window.__heldItems.length), 2);
+        await releaseEnrichment(page);
+        await button(page, 'Trailer').waitFor();
+
+        await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 50))); // let the stale handler run too
+
+        // The abandoned render's response must not paint a second synopsis or
+        // a second Trailer button into the live screen.
+        assert.equal(await page.locator('.jq-detail-overview').count(), 1);
+        assert.deepEqual(await actionLabels(page), ['Resume', 'Start Over', 'Trailer', 'Add to My List']);
+
+        // And it must be DISCARDED, not applied-and-then-caught.
+        //
+        // Be precise about what the guard buys, because it is less dramatic
+        // than it looks: the stale render's own nodes are all detached, so a
+        // stale response CANNOT paint a wrong synopsis, button or error over
+        // the live screen -- that was probed across both completion orders
+        // and never happened. What it does prevent is (1) the stale
+        // insertBefore() throwing against a node the second render detached,
+        // which is what this assertion catches, and (2) a stray hidden status
+        // paragraph being appended to the still-live container when the stale
+        // item has trailers but no overview, which this fixture cannot reach
+        // because movie-1 has both. Nothing about the container distinguishes
+        // the two renders, so a node this render created is the only signal
+        // available.
+        assert.deepEqual(consoleErrors, [], 'a superseded response must not reach the DOM or the failure path');
+        assert.equal(await page.locator('.jq-detail-enrich-error').evaluate((element) => element.hidden), true);
+    } finally {
+        await browser.close();
+    }
+});
+
+test('a detail fetch that fails says so on screen, and says what still works', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openDetail(page, 'movie-1', holdEnrichment);
+        await failEnrichment(page);
+
+        const message = page.getByText('Could not load details. Play and My List still work.', { exact: true });
+        await message.waitFor({ state: 'visible', timeout: 2000 });
+        await assertPainted(message);
+
+        // The claim in that message has to be true: both actions still work.
+        assert.deepEqual(await actionLabels(page), ['Resume', 'Start Over', 'Add to My List']);
+        await button(page, 'Resume').click();
+        await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
+        await button(page, 'Add to My List').click();
+        await page.waitForFunction(() => Boolean(document.querySelector('.jq-my-list-action'))
+            && document.querySelector('.jq-my-list-action').textContent === 'Remove from My List');
+    } finally {
+        await browser.close();
+    }
+});
+
+// The action row and any error text must stay on screen no matter how long
+// the synopsis is. Overview has never rendered before this change, so this
+// was latent; the typography audit measured the action row starting at
+// y=1273 with a 4,000-character overview at TV metrics.
+test('a 4,000-character synopsis at TV metrics keeps the action row and error text on screen', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openDetail(page, 'movie-1', async (target) => {
+            await target.evaluate(() => {
+                const getItem = window.ApiClient.getItem.bind(window.ApiClient);
+                window.ApiClient.getItem = (userId, itemId) => getItem(userId, itemId).then((item) => ({
+                    ...item,
+                    Overview: 'Northern supply lines close early this year. '.repeat(100).slice(0, 4000),
+                }));
+            });
+        });
+        await page.waitForSelector('.jq-detail-overview');
+        assert.equal(await page.locator('.jq-detail-overview').evaluate((element) => element.textContent.length), 4000);
+
+        // The TVs run a 27px root font (the simulator's is 16px), so device
+        // text is ~69% larger. The shipped stylesheet sizes this text in px,
+        // so scale the paragraph explicitly too -- the same conservative fit
+        // check test/e2e/library-queries.spec.mjs already uses for Search.
+        await page.evaluate(() => {
+            document.documentElement.style.fontSize = '27px';
+            document.querySelector('.jq-detail-overview').style.fontSize = (18 * 27 / 16) + 'px';
+        });
+
+        // Paint an error too: it sits below the action row, so it is the
+        // lowest thing on the screen and the first to fall off the bottom.
+        await page.evaluate(() => {
+            window.playbackManager.play = () => Promise.reject(new Error('nope'));
+            // Dispatched rather than clicked through Playwright: an
+            // unbounded overview puts Resume below the fold, and Playwright
+            // would then spend the whole test timeout waiting for a button
+            // to become actionable instead of reporting where it actually
+            // is. Measuring the geometry is the point of this spec.
+            Array.from(document.querySelectorAll('.jq-detail-action'))
+                .find((element) => /^(Play|Resume)$/.test(element.textContent)).click();
+        });
+        const error = page.getByText('Could not start playback. Try again.', { exact: true });
+        await error.waitFor({ state: 'visible', timeout: 2000 });
+
+        const bottoms = await page.evaluate(() => {
+            const visible = Array.from(document.querySelectorAll('.jq-detail-error')).filter((element) => !element.hidden);
+            return {
+                actions: document.querySelector('.jq-detail-actions').getBoundingClientRect().bottom,
+                errors: visible.map((element) => element.getBoundingClientRect().bottom),
+                errorCount: visible.length,
+            };
+        });
+        assert.ok(bottoms.errorCount > 0, 'the playback error must be one of the measured elements');
+        assert.ok(bottoms.actions <= 1080, `action row bottom ${bottoms.actions}px must stay within the 1080px viewport`);
+        for (const bottom of bottoms.errors) {
+            assert.ok(bottom <= 1080, `error text bottom ${bottom}px must stay within the 1080px viewport`);
+        }
+        // Still reachable by remote, not merely inside the box.
+        await assertPainted(error);
+        await assertPainted(button(page, 'Resume'));
     } finally {
         await browser.close();
     }
@@ -58,15 +330,15 @@ test('Play/Resume/Start Over call playbackManager.play with the right start posi
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
         await openDetail(page, 'movie-1');
+        await button(page, 'Trailer').waitFor(); // enrichment settled: the row is final
 
-        await page.keyboard.press('Enter'); // Resume
+        await page.keyboard.press('Enter'); // Resume -- still focused, enrichment does not move it
         await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
         const resumeCall = await page.evaluate(() => window.playbackManager.__calls.slice(-1)[0]);
         assert.equal(resumeCall.ids[0], 'movie-1');
         assert.ok(resumeCall.startPositionTicks > 0, 'Resume must start from the saved position');
 
-        await page.keyboard.press('ArrowRight'); // Start Over
-        await page.keyboard.press('Enter');
+        await button(page, 'Start Over').click();
         await page.waitForFunction(() => window.playbackManager.__calls.length > 1);
         const startOverCall = await page.evaluate(() => window.playbackManager.__calls.slice(-1)[0]);
         assert.equal(startOverCall.startPositionTicks, 0);
@@ -87,7 +359,7 @@ test('every play request names the server the ids belong to', async () => {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
         await openDetail(page, 'movie-1');
 
-        await page.keyboard.press('Enter'); // Resume
+        await button(page, 'Resume').click();
         await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
         const call = await page.evaluate(() => window.playbackManager.__calls.slice(-1)[0]);
         // The item's own ServerId, as jellyfin-web's playmenu.js:41-51 sends.
@@ -95,7 +367,8 @@ test('every play request names the server the ids belong to', async () => {
 
         // And the fallback for an item that carries no ServerId of its own:
         // ApiClient.serverId(), the accessor jellyfin-web reaches for in the
-        // same situation (mediaSegmentManager.ts:91).
+        // same situation (mediaSegmentManager.ts:91). Detail plays the LIST
+        // item it was handed, so stripping the list response is what matters.
         await page.evaluate(() => {
             const getItems = window.ApiClient.getItems;
             window.ApiClient.getItems = (userId, options) => getItems(userId, options).then((result) => ({
@@ -110,10 +383,8 @@ test('every play request names the server the ids belong to', async () => {
             document.querySelector('.jq-nav-home').click();
         });
         await page.waitForSelector('.jq-media-card');
-        await page.evaluate(() => document.querySelector('[data-item-id="movie-1"]').click());
-        await page.waitForSelector('.jq-detail-screen');
-        await page.evaluate(() => Array.from(document.querySelectorAll('.jq-detail-action'))
-            .find((button) => /^(Play|Resume)$/.test(button.textContent)).click());
+        await openItem(page, 'movie-1');
+        await button(page, 'Resume').click();
         await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
         assert.equal(
             await page.evaluate(() => window.playbackManager.__calls.slice(-1)[0].serverId),
@@ -129,6 +400,7 @@ test('a play request the player refuses is visible on screen', async () => {
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
         await openDetail(page, 'movie-1');
+        await button(page, 'Trailer').waitFor();
 
         await page.evaluate(() => {
             window.playbackManager.play = () => Promise.reject(new Error('serverId required!'));
@@ -156,19 +428,107 @@ test('a play request the player refuses is visible on screen', async () => {
     }
 });
 
-test('Trailer plays the trailer item, not the movie itself', async () => {
+test('Trailer plays the local trailer item, not the movie itself', async () => {
     const browser = await chromium.launch();
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
         await openDetail(page, 'movie-1');
+        await button(page, 'Trailer').waitFor();
 
-        await page.keyboard.press('ArrowRight'); // Resume -> Start Over
-        await page.keyboard.press('ArrowRight'); // Start Over -> Trailer
+        // Reachable from the remote, not just clickable: Right twice from the
+        // autofocused Resume, whatever the row's final length turns out to be.
+        await page.keyboard.press('ArrowRight');
+        await page.keyboard.press('ArrowRight');
         assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Trailer');
         await page.keyboard.press('Enter');
+
         await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
+        // playTrailers() hands play() the resolved trailer ITEMS
+        // (playbackmanager.js:3891-3925), not ids -- see app.js's
+        // onPlayTrailer and dev/fixtures/playback-manager-stub.js.
         const call = await page.evaluate(() => window.playbackManager.__calls.slice(-1)[0]);
-        assert.equal(call.ids[0], 'movie-1-trailer');
+        assert.equal(call.items[0].Id, 'movie-1-trailer');
+    } finally {
+        await browser.close();
+    }
+});
+
+// Both of playTrailers()'s rejection shapes reach the SAME message, and that
+// is the point. A bare `Promise.reject()` was read as "nothing to play"
+// (playbackmanager.js:3924) -- but the pinned build rejects with no argument
+// in nine places, two of them reachable from inside this very call
+// (PlaybackErrorPlaceHolder at 2348-2351, NO_MEDIA_ERROR at 2301-2302), so
+// `undefined` does not identify a cause. What the code must still do is
+// survive it: neither shape may be dereferenced.
+test('both trailer rejection shapes show one honest message and neither is dereferenced', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        const pageErrors = [];
+        page.on('pageerror', (error) => pageErrors.push(error.message));
+        await openDetail(page, 'movie-1');
+        await button(page, 'Trailer').waitFor();
+
+        const message = page.getByText('Could not play the trailer. Try again.', { exact: true });
+        for (const rejection of ['bare', 'error']) {
+            await page.evaluate((shape) => {
+                document.querySelectorAll('.jq-detail-error').forEach((element) => { element.hidden = true; });
+                window.playbackManager.playTrailers = () => (shape === 'bare'
+                    ? Promise.reject() : Promise.reject(new Error('Offline')));
+            }, rejection);
+            await button(page, 'Trailer').click();
+            await message.waitFor({ state: 'visible', timeout: 2000 });
+            await assertPainted(message);
+        }
+
+        assert.deepEqual(pageErrors, [], 'reading a bare rejection would throw inside the click handler');
+    } finally {
+        await browser.close();
+    }
+});
+
+// The local-only gate is a decision about what JellyQuest OFFERS. Making it a
+// decision about what actually PLAYS is a separate thing, and handing the
+// full item to upstream playTrailers() does not achieve it: MEASURED at
+// playbackmanager.js:3903-3916, the remote fallback runs whenever the LOCAL
+// LOOKUP is empty (`if (!items?.length)`), not when LocalTrailerCount is
+// zero. movie-1 carries both a local trailer and a RemoteTrailers entry --
+// the shape a real server returns -- so an empty local lookup here is a stale
+// LocalTrailerCount, and reaching the remote path would launch the YouTube
+// embed on a file:// origin behind an opaque overlay.
+test('a stale LocalTrailerCount never falls through to a remote trailer', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openDetail(page, 'movie-1');
+        await button(page, 'Trailer').waitFor();
+
+        // The item really does carry a remote trailer: there IS something for
+        // the fallback to reach, so this is not passing by absence of data.
+        const full = await page.evaluate(() => window.ApiClient.getItem(window.ApiClient.getCurrentUserId(), 'movie-1'));
+        assert.equal(full.LocalTrailerCount, 1);
+        assert.equal(full.RemoteTrailers.length, 1);
+
+        // The local lookup comes back empty -- a removed trailer, or a count
+        // the server has not caught up with.
+        await page.evaluate(() => {
+            window.ApiClient.getLocalTrailers = () => Promise.resolve([]);
+            window.playbackManager.__calls.length = 0;
+        });
+        await button(page, 'Trailer').click();
+
+        // Settle on whichever happened -- a playback call or the failure
+        // message -- so the assertion below reports what was PLAYED rather
+        // than timing out waiting for a message that never comes.
+        await page.waitForFunction(() => window.playbackManager.__calls.length > 0
+            || Array.from(document.querySelectorAll('.jq-detail-error')).some((element) => !element.hidden));
+
+        // No playback at all, and certainly not of an Id-less remote item.
+        assert.deepEqual(await page.evaluate(() => window.playbackManager.__calls), [],
+            'a stale local count must not reach the remote trailer path');
+        const message = page.getByText('Could not play the trailer. Try again.', { exact: true });
+        await message.waitFor({ state: 'visible', timeout: 2000 });
+        await assertPainted(message);
     } finally {
         await browser.close();
     }
@@ -179,8 +539,9 @@ test('My List toggles the favorite label and persists through ApiClient', async 
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
         await openDetail(page, 'movie-9');
+        await page.waitForSelector('.jq-detail-overview'); // enrichment settled
 
-        await page.keyboard.press('ArrowRight'); // Play -> Add to My List
+        await page.keyboard.press('ArrowRight'); // Play -> Add to My List (no trailer on movie-9)
         assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Add to My List');
         await page.keyboard.press('Enter');
         await page.waitForFunction(() => document.activeElement.textContent === 'Remove from My List');
@@ -192,65 +553,12 @@ test('My List toggles the favorite label and persists through ApiClient', async 
     }
 });
 
-test('More opens a focus-contained Playback Options dialog and Close restores focus to More', async () => {
-    const browser = await chromium.launch();
-    try {
-        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-        await openDetail(page, 'movie-1');
-
-        await page.keyboard.press('ArrowRight'); // Resume -> Start Over
-        await page.keyboard.press('ArrowRight'); // Start Over -> Trailer
-        await page.keyboard.press('ArrowRight'); // Trailer -> Add to My List
-        await page.keyboard.press('ArrowRight'); // Add to My List -> More
-        assert.equal(await page.evaluate(() => document.activeElement.textContent), 'More');
-        await page.keyboard.press('Enter');
-
-        await page.waitForSelector('.jq-playback-options');
-        assert.deepEqual(
-            await page.evaluate(() => Array.from(document.querySelectorAll('.jq-modal-option')).map((b) => b.textContent)),
-            ['English 5.1', 'French Stereo', 'Off', 'English', 'French', 'Close']
-        );
-        assert.equal(await page.evaluate(() => document.activeElement.textContent), 'English 5.1');
-
-        // Contain mode: repeated Down never escapes the dialog.
-        for (let i = 0; i < 8; i += 1) await page.keyboard.press('ArrowDown');
-        assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Close');
-
-        await page.keyboard.press('Enter');
-        assert.equal(await page.evaluate(() => document.querySelector('.jq-modal-backdrop').hidden), true);
-        assert.equal(await page.evaluate(() => document.activeElement.textContent), 'More');
-    } finally {
-        await browser.close();
-    }
-});
-
-test('the hardware Back button closes an open modal instead of navigating away from Detail', async () => {
-    const browser = await chromium.launch();
-    try {
-        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
-        await openDetail(page, 'movie-1');
-
-        await page.evaluate(() => Array.from(document.querySelectorAll('.jq-detail-action')).find((b) => b.textContent === 'More').click());
-        await page.waitForSelector('.jq-playback-options');
-
-        // Escape doubles as Back in the simulator (see app.js's BACK_KEY_CODES).
-        await page.keyboard.press('Escape');
-        await page.waitForFunction(() => document.querySelector('.jq-modal-backdrop').hidden);
-
-        // Still on Detail -- Back closed the dialog, it did not also
-        // trigger Detail's own "return to where I came from" handler.
-        assert.ok(await page.evaluate(() => Boolean(document.querySelector('.jq-detail-screen'))));
-        assert.equal(await page.evaluate(() => document.activeElement.textContent), 'More');
-    } finally {
-        await browser.close();
-    }
-});
-
 test('Left from the first action returns to the persistent rail', async () => {
     const browser = await chromium.launch();
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
         await openDetail(page, 'movie-1');
+        await button(page, 'Trailer').waitFor();
 
         assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Resume');
         await page.keyboard.press('ArrowLeft');

@@ -1,7 +1,61 @@
+/* A column, not a plain block, so the synopsis can never push the controls
+   below it off the screen.
+
+   This screen is the full height of the shell's content area, and until now
+   nothing bounded the synopsis: every child was laid out at its natural
+   height and whatever fell past 1080px was simply gone. That never bit,
+   because the Overview field is absent from list responses and this screen
+   only ever had list items -- it has never rendered a synopsis at all (see
+   detail.js's header). Fetching the full item turns that latent bug on.
+
+   MEASURED in a typography audit at the TVs' real 27px root font size (the
+   simulator's is 16px, so device text is ~69% larger): a 3,000-character
+   overview puts the trailer/error text at y=1079-1109, and at 4,000
+   characters the ACTION ROW ITSELF starts at y=1273 -- Play off-screen and
+   unreachable by remote, with no way for the user to know it is there.
+
+   `flex: 0 1 auto` + `min-height: 0` on the overview and `flex: 0 0 auto` on
+   everything else means the synopsis is the only thing that gives, so the
+   action row and every error paragraph stay on screen at any font size and
+   any synopsis length. Deliberately `overflow-y: auto` rather than a fixed
+   line clamp: the bound then follows whatever room actually remains instead
+   of a guessed line count.
+
+   The overview is NOT focusable and the TV has no pointer, so a synopsis
+   longer than the space left is visually truncated. MEASURED under these
+   conditions, ALL of which are needed to reproduce the figures: a 1920x1080
+   viewport, a 27px root font AND this paragraph explicitly scaled to
+   30.375px (18px x 27/16, the same ~69% device-text factor
+   test/e2e/detail.spec.mjs applies). Setting only the root to 27px does not
+   reproduce them, because this rule sizes the text in px and a root change
+   alone does not reach it. Under those conditions roughly 954 characters
+   are fully readable, or 851 with an error line also on screen, and a
+   1,500-character synopsis loses about 36-43% of its text.
+
+   Whether that bites in practice is UNKNOWN -- it has not been established
+   that household synopses are typically short enough, and the only real
+   sample measured was 103 characters.
+
+   Making it scrollable is deliberately NOT done here: it needs its own
+   design (how a non-control advertises that it scrolls, and how the remote
+   drives it), which is follow-up work. It is NOT a focus-order problem --
+   focus.js's focusInto() prioritises [data-jq-autofocus] over
+   firstFocusable(), so a tabindex here would not take initial focus from
+   Play. Either way, an unreadable tail is a smaller failure than an
+   unreachable Play button, which is what this rule exists to prevent. */
 .jq-detail-screen {
     padding: 48px;
     box-sizing: border-box;
     max-width: 1200px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.jq-detail-title,
+.jq-detail-actions,
+.jq-detail-error {
+    flex: 0 0 auto;
 }
 
 .jq-detail-title {
@@ -9,12 +63,16 @@
     margin: 0 0 16px;
 }
 
+/* The one child that gives -- see .jq-detail-screen above. */
 .jq-detail-overview {
     font-size: 18px;
     color: #cfd2d6;
     line-height: 1.5;
     margin: 0 0 32px;
     max-width: 800px;
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 /* Sibling margins, not flex `gap` -- see the spacing convention in focus.css. */

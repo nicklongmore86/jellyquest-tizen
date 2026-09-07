@@ -2832,21 +2832,73 @@
 /* ---- src/overlay/screens/detail.js ---- */
 // Detail/playback screen for Movie items -- see DETAIL_ACTIONS.md for
 // the full intended behavior across movies/shows/sports. This first pass
-// covers movies only (Resume/Play, Trailer, My List, and a conditional
-// More menu for track selection); Series/Sports-specific behavior
-// (seasons, episodes, highlights, chapters) is explicit follow-up work,
-// not silently missing -- see docs/rebuild-plan.md's Phase 3 status.
+// covers movies only (Resume/Play, Trailer, My List); Series/Sports-specific
+// behavior (seasons, episodes, highlights, chapters) is explicit follow-up
+// work, not silently missing -- see docs/rebuild-plan.md's Phase 3 status.
 //
 // There's no dedicated "Back" control here: per DETAIL_ACTIONS.md, Left
 // from the first action returns to the persistent rail (shell.js), which
 // is reachable from every screen -- that's the way back, same as it is
 // from Home, Search, and Library.
+//
+// ---- Why this screen fetches the item again -----------------------------
+//
+// Everything that reaches renderDetail() arrived from an
+// ApiClient.getItems() LIST query (Home, Library, Search), and a list
+// response is NOT a full BaseItemDto. Measured against the household's
+// Jellyfin 10.11.11 server, the app's own library query returns Name, Id,
+// ServerId, Type, IsFolder, HasSubtitles, Container, PremiereDate,
+// CriticRating, OfficialRating, CommunityRating, RunTimeTicks,
+// ProductionYear, UserData, VideoType, ImageTags, BackdropImageTags,
+// ImageBlurHashes, LocationType and MediaType -- and does NOT return
+// Overview, LocalTrailerCount, MediaStreams or MediaSources. This screen
+// used to read those three straight off the list item, so on the real
+// television it has never shown a synopsis and never shown a Trailer
+// button. Only dev/fixtures/api-client-stub.js made it look otherwise, by
+// returning fields the server does not.
+//
+// Widening the LIST query with Fields= is the wrong fix: measured, adding
+// Fields= to the 50-item library query takes the response from 61,669 to
+// 324,398 bytes (+426%), and the cost is paid on every grid paint. A single
+// GET /Users/{id}/Items/{itemId} with NO Fields parameter is 17,153 bytes
+// and already carries Overview, MediaStreams, LocalTrailerCount and
+// RemoteTrailers. So the full item is fetched here, once, on demand.
+//
+// The fetch happens AFTER a synchronous first paint, never before it. The
+// household's TV is on a remote network; blocking the first paint on a
+// network round trip would show a blank screen for as long as the server
+// takes. Title, Resume/Play, Start Over and My List all come from fields
+// the list item already has, so they paint immediately and the synopsis
+// and Trailer button are PATCHED in when the response lands. The patch
+// deliberately does not re-render and does not re-focus: focus was placed
+// at first paint and the user may already have moved it.
 (function () {
     'use strict';
 
-    // callbacks: { onPlay(item, startTicks) -> Promise, onPlayTrailer(item) -> Promise<boolean> }
-    // onPlay rejects when playback could not be started at all.
-    // Trailer lookup resolves false when no trailer exists, and rejects on failure.
+    // The More menu is built (hasConfigurableTracks/appendMoreMenu below)
+    // but NOT rendered, deliberately.
+    //
+    // Track selection has never actually been implemented: appendMoreMenu()
+    // creates each audio/subtitle choice as a bare <button> with no event
+    // listener of any kind, nothing stores a selection, and app.js's onPlay
+    // sends only { ids, startPositionTicks, serverId }. The existing spec
+    // asserted labels and focus containment, never an effect, which is why
+    // that never showed up as a failure.
+    //
+    // It has also never been reachable on a television, because MediaStreams
+    // is absent from list responses (see the header comment) and this screen
+    // only ever saw list items. Enriching from getItem() is the first change
+    // that COULD make the button appear -- and it would be a genuinely dead
+    // control the first time the user ever sees it. So it stays off until a
+    // follow-up wires selection through to playback. Do not flip this flag
+    // without that work.
+    var TRACK_SELECTION_ENABLED = false;
+
+    // callbacks: { onPlay(item, startTicks) -> Promise, onPlayTrailer(item) -> Promise }
+    // Both reject when the request could not be carried out. Neither
+    // rejection may be dereferenced: jellyfin-web rejects with NO argument in
+    // nine places in the pinned build, several of them reachable through
+    // these two calls (see app.js's onPlayTrailer).
     function renderDetail(container, item, callbacks) {
         container.innerHTML = '';
         container.className = 'jq-detail-screen';
@@ -2855,13 +2907,6 @@
         heading.className = 'jq-detail-title';
         heading.textContent = item.Name + (item.ProductionYear ? ' (' + item.ProductionYear + ')' : '');
         container.appendChild(heading);
-
-        if (item.Overview) {
-            var overview = document.createElement('p');
-            overview.className = 'jq-detail-overview';
-            overview.textContent = item.Overview;
-            container.appendChild(overview);
-        }
 
         var actions = document.createElement('div');
         actions.className = 'jq-row jq-detail-actions';
@@ -2904,29 +2949,6 @@
             actions.appendChild(startOverButton);
         }
 
-        if (item.LocalTrailerCount) {
-            var trailerStatus = document.createElement('p');
-            trailerStatus.className = 'jq-detail-error';
-            trailerStatus.hidden = true;
-            container.appendChild(trailerStatus);
-            var trailerButton = document.createElement('button');
-            trailerButton.className = 'jq-detail-action jq-focusable';
-            trailerButton.textContent = 'Trailer';
-            trailerButton.addEventListener('click', function () {
-                trailerStatus.hidden = true;
-                callbacks.onPlayTrailer(item).then(function (played) {
-                    if (played) return;
-                    trailerStatus.textContent = 'No trailer available.';
-                    trailerStatus.hidden = false;
-                }).catch(function (error) {
-                    trailerStatus.textContent = 'Could not load trailer. Try again.';
-                    trailerStatus.hidden = false;
-                    console.error('[JellyQuest] Trailer lookup failed:', error);
-                });
-            });
-            actions.appendChild(trailerButton);
-        }
-
         var favoriteButton = document.createElement('button');
         favoriteButton.className = 'jq-detail-action jq-focusable jq-my-list-action';
         var isFavorite = Boolean(item.UserData && item.UserData.IsFavorite);
@@ -2950,16 +2972,135 @@
         });
         actions.appendChild(favoriteButton);
 
-        var configurable = hasConfigurableTracks(item);
-        if (configurable) {
-            var moreButton = document.createElement('button');
-            moreButton.className = 'jq-detail-action jq-focusable';
-            moreButton.textContent = 'More';
-            actions.appendChild(moreButton);
-            appendMoreMenu(container, item, moreButton);
-        }
+        // The TV has no console, so a failed enrichment has to say so on
+        // screen -- and say what still works, because Play and My List do.
+        var detailsError = document.createElement('p');
+        detailsError.className = 'jq-detail-error jq-detail-enrich-error';
+        detailsError.hidden = true;
+        container.appendChild(detailsError);
 
         window.JellyQuestFocus.focusFirst(container);
+
+        // ---- Enrichment ------------------------------------------------
+        //
+        // Staleness guard: JellyQuestShell.getContent() hands back the SAME
+        // <main> node for every screen (shell.js:55,66), so a render counter
+        // cannot tell a re-entrant showDetail() for the same item apart from
+        // this one. What can is node identity: `heading` is a node THIS
+        // render created and appended, and any later render clears the
+        // container, which detaches it. Same idiom as app.js's Requests
+        // loading check (`if (loading.parentNode !== container) return;`).
+        function isCurrentRender() {
+            return heading.parentNode === container;
+        }
+
+        function showDetailsUnavailable(error) {
+            detailsError.textContent = 'Could not load details. Play and My List still work.';
+            detailsError.hidden = false;
+            console.error('[JellyQuest] Item details failed to load:', error);
+        }
+
+        function applyFullItem(full) {
+            if (full.Overview) {
+                var overview = document.createElement('p');
+                overview.className = 'jq-detail-overview';
+                overview.textContent = full.Overview;
+                // Patch, don't rebuild: inserting in place keeps
+                // document.activeElement, the action row's node identity and
+                // any error paragraph an in-flight play() failure already
+                // painted. Re-rendering would throw all three away.
+                container.insertBefore(overview, actions);
+            }
+
+            // LOCAL trailers only -- deliberately NARROWER than upstream
+            // jellyfin-web, which also offers a trailer for RemoteTrailers
+            // alone (controllers/itemDetails/index.js:502 gates on
+            // `LocalTrailerCount || RemoteTrailers?.length`), and narrower
+            // than DETAIL_ACTIONS.md described before this change.
+            //
+            // Reason: jellyfin-web plays a RemoteTrailer IN-APP through a
+            // YouTube IFrame embed -- playbackmanager.js:3891-3925 builds an
+            // Id-less pseudo-item and dispatches on canPlayUrl, handled by
+            // plugins/youtubePlayer/plugin.js:251-253, registered in
+            // www/config.json. MEASURED: the packaged app is loaded from a
+            // `file://` URL on both of the household's sets (README.md:52),
+            // which gives it a null origin. INFERRED, and NOT settleable
+            // without the television: the YouTube IFrame API handshake is
+            // origin-governed and the plugin's own error table already
+            // includes 101/150 YoutubeDenied, so a null origin is expected to
+            // be refused. Second unresolved unknown, also INFERRED: the
+            // youtube container sits at z-index 1000, far under
+            // #jellyquest-root's 2147483000 (app.css), so even a working
+            // embed would be expected to play behind the overlay.
+            //
+            // So a film with only RemoteTrailers gets NO Trailer button
+            // rather than a button that probably does nothing visible. Do
+            // not "fix" this back to the upstream gate on inference alone --
+            // it needs a measurement on real hardware first.
+            var hasTrailer = full.LocalTrailerCount > 0;
+            if (hasTrailer) appendTrailerAction(full);
+
+            // Deliberately not rendered -- see TRACK_SELECTION_ENABLED.
+            if (TRACK_SELECTION_ENABLED && hasConfigurableTracks(full)) {
+                var moreButton = document.createElement('button');
+                moreButton.className = 'jq-detail-action jq-focusable';
+                moreButton.textContent = 'More';
+                actions.appendChild(moreButton);
+                appendMoreMenu(container, full, moreButton);
+            }
+        }
+
+        function appendTrailerAction(full) {
+            var trailerStatus = document.createElement('p');
+            trailerStatus.className = 'jq-detail-error';
+            trailerStatus.hidden = true;
+            container.appendChild(trailerStatus);
+
+            var trailerButton = document.createElement('button');
+            trailerButton.className = 'jq-detail-action jq-focusable';
+            trailerButton.textContent = 'Trailer';
+            trailerButton.addEventListener('click', function () {
+                trailerStatus.hidden = true;
+                // The FULL item is what goes to playback: playTrailers()
+                // reads LocalTrailerCount and ServerId off it, and the list
+                // item carries neither.
+                // ONE message, and it deliberately does not name a cause.
+                // This used to show "No trailer available." for a bare
+                // rejection and a failure message otherwise, on the reading
+                // that playbackmanager.js:3924 uniquely means "nothing to
+                // play". MEASURED: it does not. The pinned build rejects with
+                // no argument in nine places, and playInternal() alone
+                // reaches two of them from inside this call
+                // (PlaybackErrorPlaceHolder at playbackmanager.js:2348-2351,
+                // NO_MEDIA_ERROR at 2301-2302). A confident cause we cannot
+                // substantiate is worse on a TV than an honest one we can.
+                Promise.resolve(callbacks.onPlayTrailer(full)).catch(function (error) {
+                    trailerStatus.textContent = 'Could not play the trailer. Try again.';
+                    trailerStatus.hidden = false;
+                    // Logged, never read: the rejection value is routinely
+                    // undefined.
+                    console.error('[JellyQuest] Trailer playback failed:', error);
+                });
+            });
+            // Keep the documented action order (Resume, Start Over, Trailer,
+            // My List) by inserting rather than appending -- My List is
+            // already on the row from the first paint.
+            actions.insertBefore(trailerButton, favoriteButton);
+        }
+
+        var apiClient = window.ApiClient;
+        if (!apiClient || typeof apiClient.getItem !== 'function') {
+            showDetailsUnavailable(new Error('ApiClient.getItem is unavailable'));
+            return;
+        }
+        var currentUserId = typeof apiClient.getCurrentUserId === 'function' ? apiClient.getCurrentUserId() : null;
+        Promise.resolve(apiClient.getItem(currentUserId, item.Id)).then(function (full) {
+            if (!isCurrentRender()) return; // navigated away, or re-entered for another item
+            applyFullItem(full || {});
+        }).catch(function (error) {
+            if (!isCurrentRender()) return;
+            showDetailsUnavailable(error);
+        });
     }
 
     function hasConfigurableTracks(item) {
@@ -3509,6 +3650,61 @@
         }
     }
 
+    // ---- Trailers: making "local only" actually local only ---------------
+    //
+    // Detail offers a Trailer action only for LocalTrailerCount > 0 (see the
+    // gate in detail.js). Handing upstream the full item does NOT make the
+    // resulting PLAYBACK local-only, which is a different thing and was the
+    // bug here.
+    //
+    // MEASURED in the pinned build (.jellyfin-web-ref 35c0793,
+    // playbackmanager.js:3903-3916): playTrailers() falls back to remote
+    // trailers whenever the LOCAL LOOKUP comes back empty, regardless of
+    // LocalTrailerCount --
+    //
+    //     if (item.LocalTrailerCount) { items = await apiClient.getLocalTrailers(...); }
+    //     if (!items?.length) { items = (item.RemoteTrailers || []).map(...); }
+    //
+    // So a film whose LocalTrailerCount is stale, or whose local trailer has
+    // since been removed, would silently launch the YouTube embed: exactly
+    // the outcome the local-only gate exists to prevent, on a file:// origin
+    // where it is inferred to fail, behind an opaque overlay, with no console
+    // and only a remote.
+    //
+    // The fix takes its guarantee from the INPUT rather than from that
+    // branch: an item carrying no RemoteTrailers gives the fallback nothing
+    // to build a remote pseudo-item out of, because the item handed in is
+    // that method's only source of remote URLs.
+    //
+    // Be exact about how far that is established. VERIFIED by execution
+    // against the PINNED local-player implementation (.jellyfin-web-ref
+    // 35c0793): with RemoteTrailers stripped, an empty or null local lookup
+    // rejects without reaching playback, successful local playback is
+    // unaffected, and getLocalTrailers offers no other item field or
+    // failure-path URL to fall back to. That is a statement about THIS ref,
+    // not about however upstream might be written in future -- a ref bump
+    // must re-verify it. Stripping the input is simply the strongest defence
+    // available from this side of the call: it does not depend on which
+    // branch upstream takes, only on there being no remote data to take.
+    //
+    // Out of scope and deliberately unmodelled: the active-player delegation
+    // at playbackmanager.js:3894 (`if (player?.playTrailers) return
+    // player.playTrailers(item)`) hands the whole item to a cast target
+    // before any of the above runs. JellyQuest has no cast UI, so that
+    // branch is unreachable in the supported app flow and the stub does not
+    // model it -- for the same reason dev/fixtures/playback-manager-stub.js
+    // declines to model remote-player delegation in play().
+    //
+    // A shallow copy, so the caller's item -- the one Detail still holds and
+    // paints from -- is left untouched.
+    function localTrailersOnly(item) {
+        var copy = {};
+        Object.keys(item).forEach(function (key) {
+            if (key !== 'RemoteTrailers') copy[key] = item[key];
+        });
+        return copy;
+    }
+
     function showDetail(item, returnTo) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
@@ -3539,16 +3735,36 @@
             onPlay: function (playItem, startPositionTicks) {
                 return requestPlayback(playItem, { ids: [playItem.Id], startPositionTicks: startPositionTicks });
             },
+            // Trailers go through jellyfin-web's own playTrailers()
+            // (playbackmanager.js:3891-3925) rather than requestPlayback(),
+            // on an item stripped of RemoteTrailers -- see
+            // localTrailersOnly() above for why that stripping is what makes
+            // the local-only decision real.
+            //
+            // Guarded by typeof rather than called directly: playbackManager
+            // is jellyfin-web's global, created by this project's build-time
+            // patch (scripts/patch-jellyfin-web.mjs), and a missing one must
+            // surface as Detail's visible failure state rather than a
+            // TypeError inside a click handler.
+            //
+            // The rejection is passed through unclassified, deliberately.
+            // playTrailers() rejects with NO ARGUMENT when it found nothing
+            // to play (playbackmanager.js:3924), and it is tempting to read
+            // that as "no trailer available" -- but MEASURED, a bare
+            // Promise.reject() is not a unique signal: the pinned build has
+            // NINE of them, and at least two are reachable from inside this
+            // very call. playInternal() rejects bare after
+            // showPlaybackInfoErrorMessage(self, 'PlaybackErrorPlaceHolder')
+            // (playbackmanager.js:2348-2351) and again for NO_MEDIA_ERROR
+            // (playbackmanager.js:2301-2302). Nothing in the pinned upstream
+            // distinguishes "there was no trailer" from "playing it failed",
+            // so Detail must not claim to know which happened.
             onPlayTrailer: function (playItem) {
-                var userId = window.ApiClient.getCurrentUserId();
-                return window.ApiClient.getLocalTrailers(userId, playItem.Id).then(function (trailers) {
-                    if (!trailers.length) return false;
-                    // The trailer is its own item, so its own ServerId is the
-                    // right one to send.
-                    return requestPlayback(trailers[0], { ids: [trailers[0].Id] }).then(function () {
-                        return true;
-                    });
-                });
+                var manager = window.playbackManager;
+                if (!manager || typeof manager.playTrailers !== 'function') {
+                    return Promise.reject(new Error('playbackManager.playTrailers is unavailable.'));
+                }
+                return Promise.resolve(manager.playTrailers(localTrailersOnly(playItem)));
             },
         });
     }

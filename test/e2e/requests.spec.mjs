@@ -289,28 +289,45 @@ for (const screen of ['Requests', 'library']) {
     });
 }
 
+// These two used to assert DIFFERENT messages for the two rejection shapes.
+// They do not any more: a bare `Promise.reject()` is not a unique signal for
+// "no trailer" in the pinned build (nine such sites; see app.js's
+// onPlayTrailer), so both now reach one message that names no cause. Both
+// shapes are still exercised, because what still has to hold is that neither
+// is dereferenced and both recover.
 for (const outcome of ['rejected', 'empty']) {
-    test(`Trailer lookup ${outcome} shows a distinct message`, async () => {
+    test(`Trailer ${outcome} shows a message that names no cause, and recovers`, async () => {
         const browser = await chromium.launch();
         try {
             const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
             await openRequestsAs(page, 'Alice');
             await page.evaluate(() => document.querySelector('.jq-nav-home').click());
             await page.waitForSelector('.jq-card');
+            // Trailer activation now goes through playbackManager.playTrailers()
+            // rather than ApiClient.getLocalTrailers() + play() (see app.js's
+            // onPlayTrailer). Both of its rejection shapes are exercised here
+            // -- a real error, and the bare `Promise.reject()` of
+            // playbackmanager.js:3924 -- and both must reach the same
+            // message, because nothing in the pinned upstream tells them
+            // apart.
             await page.evaluate((outcome) => {
-                window.ApiClient.getLocalTrailers = () => outcome === 'rejected'
-                    ? Promise.reject(new Error('Offline')) : Promise.resolve([]);
+                window.__realPlayTrailers = window.playbackManager.playTrailers;
+                window.playbackManager.playTrailers = () => outcome === 'rejected'
+                    ? Promise.reject(new Error('Offline')) : Promise.reject();
             }, outcome);
             await page.locator('.jq-card').first().click();
-            await page.getByRole('button', { name: 'Trailer', exact: true }).click();
-            const message = page.getByText(outcome === 'rejected' ? 'Could not load trailer. Try again.' : 'No trailer available.', { exact: true });
+            const trailer = page.getByRole('button', { name: 'Trailer', exact: true });
+            await trailer.waitFor(); // Detail fetches the full item before it can offer this
+            await trailer.click();
+            const message = page.getByText('Could not play the trailer. Try again.', { exact: true });
             await message.waitFor({ state: 'visible', timeout: 2000 });
             await assertPainted(message);
             await page.evaluate(() => {
+                window.playbackManager.playTrailers = window.__realPlayTrailers;
                 window.ApiClient.getLocalTrailers = () => Promise.resolve([{ Id: 'trailer-retry', Type: 'Trailer', ServerId: 'dev-server-1' }]);
             });
-            await page.getByRole('button', { name: 'Trailer', exact: true }).click();
-            await page.waitForFunction(() => window.playbackManager.__calls.some((call) => call.ids[0] === 'trailer-retry'));
+            await trailer.click();
+            await page.waitForFunction(() => window.playbackManager.__calls.some((call) => call.items && call.items[0].Id === 'trailer-retry'));
             assert.equal(await message.isVisible(), false);
         } finally {
             await browser.close();
