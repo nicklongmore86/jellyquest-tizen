@@ -186,8 +186,16 @@ test('fixture models empty and deep series with honest show-endpoint semantics',
     assert.ok(richEpisode.Items[0].Overview);
     assert.deepEqual(Array.from(richEpisode.Items[0].MediaStreams, stream => stream.Index), [3, 8]);
     assert.equal(richEpisode.Items[0].LocalTrailerCount, 0);
-    for (const query of [{ Bogus: true }, { Limit: -1 }, { Filters: 'NotAFilter' }, { SortBy: 'NotASort' }, { Fields: 'NotAField' }]) {
+    for (const query of [{ Bogus: true }, { Limit: -1 }, { Filters: 'NotAFilter' }, { SortBy: 'NotASort' }]) {
         assert.throws(() => api.getEpisodes('series-paw-patrol', query), /Unmodeled/);
+    }
+    for (const call of [
+        () => api.getEpisodes('series-nhl', { Fields: 'NotAField' }),
+        () => api.getSeasons('series-nhl', { Fields: 'NotAField' }),
+        () => api.getEpisodes('series-paw-patrol', { Limit: 0, Fields: 'NotAField' }),
+        () => api.getEpisodes('series-paw-patrol', { SeasonId: 'season-999', Fields: 'NotAField' })
+    ]) {
+        assert.throws(call, /Unmodeled Fields value: NotAField/);
     }
     assert.throws(() => api.getEpisodes('missing-series'), /Unknown seriesId/);
 });
@@ -224,7 +232,15 @@ test('Search finds Series and Movies but excludes Episodes', async () => withPag
         await page.waitForSelector(`.jq-search-results [data-item-id="${expected}"]`);
         assert.ok((await ids(page, '.jq-search-results .jq-media-card')).includes(expected));
     }
-    await page.locator('.jq-search-input').fill('Northern Journey 516');
+    const episodeOnly = await page.evaluate(async () => {
+        const result = await window.ApiClient.getItems('user-alice', {
+            Recursive: true, IncludeItemTypes: 'Movie,Series,Episode', SearchTerm: 'PAW Patrol 6x27'
+        });
+        return result.Items.map(item => ({ Id: item.Id, Type: item.Type }));
+    });
+    assert.deepEqual(episodeOnly, [{ Id: 'episode-516', Type: 'Episode' }],
+        'negative search probe requires a real matching Episode in the fixture');
+    await page.locator('.jq-search-input').fill('PAW Patrol 6x27');
     const message = page.locator('.jq-search-empty');
     await message.waitFor();
     assert.equal(await message.textContent(), 'No films or shows match. Episode search isn’t available yet.');

@@ -42,9 +42,10 @@
             // The only fixture item with multiple tracks -- exercises the
             // conditionally-shown More/Playback Options menu.
             MediaStreams: [
-                // MEASURED: MediaStream.Index is the value playbackManager
-                // consumes. Deliberately keep it different from array position
-                // so a caller using the latter cannot pass against this fixture.
+                // SOURCE-CONFIRMED in pinned jellyfin-web playbackmanager.js
+                // lines 1233, 1238 and 1289: playback matches MediaStream.Index.
+                // Keep it different from array position so a caller using the
+                // latter cannot pass against this fixture.
                 { Type: 'Audio', DisplayTitle: 'English 5.1', Index: 2 },
                 { Type: 'Audio', DisplayTitle: 'French Stereo', Index: 5 },
                 { Type: 'Subtitle', DisplayTitle: 'English', Index: 9 },
@@ -143,6 +144,9 @@
             ParentBackdropItemId: seriesId, ParentBackdropImageTags: idNumber < 700 ? ['backdrop-v1'] : [],
             Overview: 'A full episode synopsis that list endpoints must omit.', LocalTrailerCount: 0,
             MediaStreams: [
+                // LIMITATION: every fixture episode deliberately uses this same
+                // pair. It distinguishes stream Index from array position, but
+                // does not test carrying different selections between episodes.
                 { Type: 'Audio', DisplayTitle: 'English Stereo', Index: 3 },
                 { Type: 'Subtitle', DisplayTitle: 'English', Index: 8 },
             ],
@@ -235,7 +239,8 @@
 
     // Jellyfin 10.11's generated API enums. Valid values are accepted even
     // where the measured Shows/{id}/Episodes endpoint ignores the option;
-    // values outside these enums are rejected by server model binding.
+    // INFERRED from the generated contract, not live-probed: values outside
+    // these enums are rejected by server model binding.
     var ITEM_FILTERS = ['Dislikes', 'IsFavorite', 'IsFavoriteOrLikes', 'IsFolder', 'IsNotFolder',
         'IsPlayed', 'IsResumable', 'IsUnplayed', 'Likes'];
     var ITEM_SORTS = ['AiredEpisodeOrder', 'AirTime', 'Album', 'AlbumArtist', 'Artist', 'CommunityRating',
@@ -266,10 +271,17 @@
         if (fields === undefined) return projected;
         var requested = Array.isArray(fields) ? fields : fields.split(',');
         requested.forEach(function (field) {
-            if (ITEM_FIELDS.indexOf(field) === -1) throw new Error('Unmodeled Fields value: ' + field);
             if (Object.prototype.hasOwnProperty.call(item, field)) projected[field] = item[field];
         });
         return projected;
+    }
+
+    function validateFields(fields) {
+        if (fields === undefined) return;
+        var requested = Array.isArray(fields) ? fields : fields.split(',');
+        requested.forEach(function (field) {
+            if (ITEM_FIELDS.indexOf(field) === -1) throw new Error('Unmodeled Fields value: ' + field);
+        });
     }
 
     function validateShowOptions(endpoint, options, modeled) {
@@ -279,6 +291,7 @@
         if (options.UserId !== undefined && typeof options.UserId !== 'string') throw new Error('Unmodeled UserId');
         if (options.userId !== undefined && typeof options.userId !== 'string') throw new Error('Unmodeled userId');
         if (options.Fields !== undefined && !Array.isArray(options.Fields) && typeof options.Fields !== 'string') throw new Error('Unmodeled Fields');
+        validateFields(options.Fields);
     }
 
     function withUserData(item, userId) {
@@ -411,11 +424,14 @@
             var page = typeof limit === 'number' ? sorted.slice(start, start + limit) : sorted.slice(start);
             return Promise.resolve({ Items: page.map(projectListFields), TotalRecordCount: sorted.length });
         },
-        // MEASURED against Jellyfin 10.11.11: without a season this endpoint
-        // returns every episode in one response; Filters, SortBy and SortOrder
-        // are accepted but silently ignored; Limit is honored while
-        // TotalRecordCount remains the pre-Limit count; the two false virtual
-        // switches remove PAW Patrol's 129 placeholders.
+        // NOT MODELED: getNextUpEpisodes. Its personalized episode-selection
+        // semantics were never probed, so inventing a response would be unsafe.
+        // NOT MODELED: startItemId. Pinned playbackmanager.js sends this key;
+        // the strict option guard below deliberately rejects it until modeled.
+        // MEASURED against Jellyfin 10.11.11: a call without a season returns
+        // every episode; Filters, SortBy and SortOrder are accepted but silently
+        // ignored; Limit is honored while TotalRecordCount remains the pre-Limit
+        // count; the two false virtual switches remove PAW Patrol placeholders.
         getEpisodes: function (seriesId, options) {
             options = options || {};
             validateShowOptions('getEpisodes', options, ['UserId', 'userId', 'SeasonId', 'seasonId', 'IsMissing',
@@ -434,6 +450,8 @@
             var userId = options.UserId || options.userId || currentUserId;
             var candidates = EPISODES.filter(function (episode) { return episode.SeriesId === seriesId; });
             if (seriesId === PAW_PATROL_ID) candidates = candidates.concat(VIRTUAL_EPISODES);
+            // INFERRED from the generated Show API documentation, not measured
+            // by the supplied live-server probes: SeasonId scopes this response.
             if (seasonId !== undefined) candidates = candidates.filter(function (episode) { return episode.SeasonId === seasonId; });
             // INFERRED split: all 129 measured placeholders are missing, and
             // the final 29 are also classed as unaired solely so both switches
