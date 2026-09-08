@@ -37,6 +37,23 @@ async function openScreen(page, screen) {
         await page.getByRole('button', { name: 'Trailer', exact: true }).waitFor();
         return;
     }
+    if (screen === 'series') {
+        await page.evaluate(() => {
+            const getEpisodes = window.ApiClient.getEpisodes.bind(window.ApiClient);
+            window.ApiClient.getEpisodes = function (id, options) {
+                return getEpisodes(id, options).then((result) => ({
+                    ...result,
+                    Items: result.Items.map((episode) => episode.Id === 'episode-1' ? {
+                        ...episode,
+                        UserData: { PlaybackPositionTicks: 300000000, LastPlayedDate: '2026-09-08T00:00:00Z' },
+                    } : episode),
+                }));
+            };
+            document.querySelector('[data-item-id="series-1"]').click();
+        });
+        await page.getByRole('button', { name: 'Restart Episode', exact: true }).waitFor();
+        return;
+    }
     await page.locator(`.jq-nav-${screen}`).click();
     const input = page.locator(`.jq-${screen}-input`);
     await input.fill('a'); // Multiple existing matches in both simulator fixtures.
@@ -50,6 +67,7 @@ for (const [selector, screen, axis, containers = 1] of [
     ['.jq-home-row', 'home', 'x', 2],
     ['.jq-search-results', 'search', 'x'],
     ['.jq-detail-actions', 'detail', 'x'],
+    ['.jq-series-actions', 'series', 'x'],
     ['.jq-exit-actions', 'exit', 'x'],
     ['.jq-request-card', 'requests', 'y', 3],
     ['.jq-requests-results', 'requests', 'wrapped'],

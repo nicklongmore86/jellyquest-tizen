@@ -61,11 +61,32 @@ async function renderSeriesDirectly(page, item) {
                 onBack() {},
                 onSelectItem(episode) { window.__selected.push(episode.Id); },
                 onSeasonChange() {},
+                onPlay(episode, startPositionTicks) {
+                    window.__directPlays = window.__directPlays || [];
+                    window.__directPlays.push({ id: episode.Id, startPositionTicks });
+                    return Promise.resolve();
+                },
             }
         );
     }, item);
     await page.waitForSelector('.jq-series-screen');
 }
+
+test('the direct-render harness can activate a Series action without an uncaught callback error', async () => withPage(async (page) => {
+    const pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await renderSeriesDirectly(page, {
+        Id: 'series-paw-patrol', Name: 'PAW Patrol', Type: 'Series', ServerId: 'dev-server-1',
+    });
+    await page.getByRole('button', { name: 'Resume', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Resume', exact: true }).click();
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+    assert.deepEqual(pageErrors, []);
+    assert.deepEqual(await page.evaluate(() => window.__directPlays), [{
+        id: 'episode-516', startPositionTicks: 6000000000,
+    }]);
+}));
 
 // Programmatic activation, matching detail.spec.mjs's and
 // series-routing.spec.mjs's established convention: a real Playwright click
@@ -76,6 +97,27 @@ async function renderSeriesDirectly(page, item) {
 async function openSeriesOne(page) {
     await page.evaluate(() => document.querySelector('[data-item-id="series-1"]').click());
     await page.waitForSelector('.jq-series-season-button');
+}
+
+async function instrumentSeriesWithProgress(page) {
+    await page.evaluate(() => {
+        window.__seriesEpisodeQueryCount = 0;
+        const getEpisodes = window.ApiClient.getEpisodes.bind(window.ApiClient);
+        window.ApiClient.getEpisodes = function (id, options) {
+            window.__seriesEpisodeQueryCount += 1;
+            return getEpisodes(id, options).then((result) => ({
+                ...result,
+                Items: result.Items.map((episode) => episode.Id === 'episode-1' ? {
+                    ...episode,
+                    UserData: {
+                        PlaybackPositionTicks: 300000000,
+                        LastPlayedDate: '2026-09-08T00:00:00Z',
+                        Played: false,
+                    },
+                } : episode),
+            }));
+        };
+    });
 }
 
 function cardText(page) {
@@ -134,7 +176,10 @@ test('a show opens on its first season with the contextual episode label', async
         assert.notEqual(card.title, 'Northern Stories 1', 'the show name must not lead inside the show');
     }
 
-    // The ORDINARY autofocus case. Removing the identity clause in
+    // The show action resolver has completed before the cards mount. Alice
+    // has no progress in this series and the fixture has no Next Up answer,
+    // so the season selector remains the primary focus target.
+    // Removing the identity clause in
     // focus.js's focusFirst() (`document.activeElement !== expectedFocus`)
     // breaks exactly this assertion -- see the PR body's mutation run.
     const focus = await focusSnapshot(page);
@@ -153,7 +198,7 @@ test('episode requests carry the virtual-record switches and no ignored sort or 
     assert.deepEqual(calls.seasons, [{ id: 'series-1', options: { UserId: 'user-alice' } }]);
     assert.deepEqual(calls.episodes, [{
         id: 'series-1',
-        options: { UserId: 'user-alice', SeasonId: 'season-1', IsMissing: false, IsVirtualUnaired: false },
+        options: { UserId: 'user-alice', IsMissing: false, IsVirtualUnaired: false },
     }]);
     // MEASURED on the household server: this endpoint accepts and silently
     // ignores Filters/SortBy/SortOrder, so sending them would look like it
@@ -186,7 +231,7 @@ test('the episode list is ordered client-side, not in the order the server repli
         Array.from({ length: 15 }, (_, index) => `S1 E${index + 1}`));
 }));
 
-test('choosing a season reloads the list and leaves the cursor on the selector', async () => withPage(async (page) => {
+test('choosing a season reuses the whole-series list and leaves the cursor on the selector', async () => withPage(async (page) => {
     await recordShowQueries(page);
     await openSeriesOne(page);
     await page.waitForSelector('.jq-series-episodes .jq-media-card');
@@ -213,7 +258,7 @@ test('choosing a season reloads the list and leaves the cursor on the selector',
     await assertPainted(page.locator(':focus'));
 
     const calls = await page.evaluate(() => window.__showCalls.episodes.map((call) => call.options.SeasonId));
-    assert.deepEqual(calls, ['season-1', 'season-2']);
+    assert.deepEqual(calls, [undefined], 'season switches must not refetch a list already needed by show actions');
 }));
 
 test('an episode opens Detail, and Back returns to the season it was chosen from', async () => withPage(async (page) => {
@@ -239,6 +284,135 @@ test('an episode opens Detail, and Back returns to the season it was chosen from
     await page.waitForFunction(() =>
         document.querySelector('.jq-series-episodes .jq-media-card .jq-media-card-meta')?.textContent === 'S2 E1');
     await assertPainted(page.locator(':focus'));
+}));
+
+test('Back from an unplayed Episode Detail reuses the ordered Series list', async () => withPage(async (page) => {
+    await page.evaluate(() => {
+        window.__seriesEpisodeQueries = [];
+        const getEpisodes = window.ApiClient.getEpisodes.bind(window.ApiClient);
+        window.ApiClient.getEpisodes = function (id, options) {
+            return getEpisodes(id, options).then((result) => {
+                window.__seriesEpisodeQueries.push({
+                    items: result.Items.length,
+                    bytes: new Blob([JSON.stringify(result)]).size,
+                });
+                return result;
+            });
+        };
+    });
+    await openSeriesOne(page);
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+    await openSeasonMenu(page);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('[data-item-id="episode-17"]');
+
+    await page.evaluate(() => document.querySelector('[data-item-id="episode-17"]').click());
+    await page.waitForSelector('.jq-detail-screen');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.jq-series-season-button');
+    // Completion condition accepts both the correct list and an empty/foreign
+    // cached list, so the content assertion below—not a timeout—distinguishes
+    // them. A reversed list also completes here with the wrong card order.
+    await page.waitForFunction(() =>
+        document.querySelector('.jq-series-episodes .jq-media-card')
+        || document.querySelector('.jq-series-status')?.textContent === 'No episodes in this season yet.');
+
+    assert.equal(await page.locator('.jq-series-season-button').textContent(), 'Season 2 ▾');
+    const queries = await page.evaluate(() => window.__seriesEpisodeQueries);
+    assert.equal(queries.length, 1, `expected one whole-series response, got ${JSON.stringify(queries)}`);
+    assert.equal(queries[0].items, 354);
+    assert.deepEqual(await page.locator('.jq-series-episodes .jq-media-card').evaluateAll((cards) =>
+        cards.map((card) => ({
+            id: card.getAttribute('data-item-id'),
+            meta: card.querySelector('.jq-media-card-meta')?.textContent ?? '',
+        }))), Array.from({ length: 15 }, (_, index) => ({
+        id: `episode-${index + 16}`, meta: `S2 E${index + 1}`,
+    })));
+}));
+
+// NON-REGRESSION GUARD: master also fetched twice because it had no cache.
+// With the navigation-local cache this becomes load-bearing: a playback
+// request can update episode UserData, so Back must refetch before deriving
+// Resume/Continue rather than reuse the pre-playback list.
+test('playback from Episode Detail invalidates the ordered Series list before Back', async () => withPage(async (page) => {
+    await page.evaluate(() => {
+        window.__seriesEpisodeQueryCount = 0;
+        const getEpisodes = window.ApiClient.getEpisodes.bind(window.ApiClient);
+        window.ApiClient.getEpisodes = function (id, options) {
+            window.__seriesEpisodeQueryCount += 1;
+            return getEpisodes(id, options);
+        };
+    });
+    await openSeriesOne(page);
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+    await page.evaluate(() => document.querySelector('[data-item-id="episode-1"]').click());
+    await page.getByRole('button', { name: 'Play', exact: true }).click();
+    await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
+    await page.evaluate(() => window.playbackManager.__endPlayback());
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+
+    assert.equal(await page.evaluate(() => window.__seriesEpisodeQueryCount), 2,
+        'return after playback must refetch current UserData');
+}));
+
+test('playback from a Series action invalidates the ordered list before a later Detail return', async () => withPage(async (page) => {
+    await instrumentSeriesWithProgress(page);
+    await openSeriesOne(page);
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
+    await page.evaluate(() => {
+        window.playbackManager.__endPlayback();
+        document.querySelector('[data-item-id="episode-3"]').click();
+    });
+    await page.waitForSelector('.jq-detail-screen');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+
+    assert.equal(await page.evaluate(() => window.__seriesEpisodeQueryCount), 2,
+        'a Series action can change progress, so a later Detail return must refetch UserData');
+}));
+
+test('a rejected Series playback request still invalidates the ordered list', async () => withPage(async (page) => {
+    await instrumentSeriesWithProgress(page);
+    await page.evaluate(() => {
+        window.playbackManager.play = () => Promise.reject(new Error('player unavailable'));
+    });
+    await openSeriesOne(page);
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.waitForFunction(() =>
+        document.querySelector('.jq-series-play-error')?.textContent === 'Could not start playback. Try again.');
+    await page.evaluate(() => document.querySelector('[data-item-id="episode-3"]').click());
+    await page.waitForSelector('.jq-detail-screen');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+
+    assert.equal(await page.evaluate(() => window.__seriesEpisodeQueryCount), 2,
+        'rejected Series playback must invalidate conservatively');
+}));
+
+test('a rejected Detail playback request still invalidates the ordered list', async () => withPage(async (page) => {
+    await page.evaluate(() => {
+        window.__seriesEpisodeQueryCount = 0;
+        const getEpisodes = window.ApiClient.getEpisodes.bind(window.ApiClient);
+        window.ApiClient.getEpisodes = function (id, options) {
+            window.__seriesEpisodeQueryCount += 1;
+            return getEpisodes(id, options);
+        };
+        window.playbackManager.play = () => Promise.reject(new Error('player unavailable'));
+    });
+    await openSeriesOne(page);
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+    await page.evaluate(() => document.querySelector('[data-item-id="episode-1"]').click());
+    await page.getByRole('button', { name: 'Play', exact: true }).click();
+    await page.waitForFunction(() =>
+        document.querySelector('.jq-detail-error')?.textContent === 'Could not start playback. Try again.');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+
+    assert.equal(await page.evaluate(() => window.__seriesEpisodeQueryCount), 2,
+        'rejected Detail playback must invalidate conservatively');
 }));
 
 test('the browser exits by Enter on Back, hardware Back, and ArrowLeft to the rail', async () => withPage(async (page) => {
@@ -484,10 +658,11 @@ test('a failed episode request says so, and re-choosing the season is the retry'
     });
     await openSeriesOne(page);
     await page.waitForFunction(() =>
-        document.querySelector('.jq-series-status')?.textContent === 'Couldn’t load this season’s episodes. Try again.');
+        document.querySelector('.jq-series-status')?.textContent === 'Couldn’t load this show’s episodes. Try again.');
 
     assert.equal(await page.locator('.jq-series-episodes .jq-media-card').count(), 0);
     assert.equal((await focusSnapshot(page)).className.includes('jq-series-season-button'), true);
+    assert.equal(await page.locator('.jq-series-season-button').textContent(), 'Season 1 ▾');
     await assertPainted(page.locator('.jq-series-status'));
 
     await page.evaluate(() => { window.__failEpisodes = false; });
@@ -510,7 +685,7 @@ test('a late episode response does not steal a newer rail selection', async () =
     await page.evaluate(() => document.querySelector('.jq-nav-search').focus());
     await assertPainted(page.locator('.jq-nav-search'));
     await page.evaluate(() => window.__resolveEpisodes({
-        Items: [{ Id: 'late-episode', Name: 'Late episode', Type: 'Episode', ParentIndexNumber: 1, IndexNumber: 1 }],
+        Items: [{ Id: 'late-episode', Name: 'Late episode', Type: 'Episode', SeasonId: 'season-1', ParentIndexNumber: 1, IndexNumber: 1 }],
         TotalRecordCount: 1,
     }));
     await page.waitForSelector('[data-item-id="late-episode"]');

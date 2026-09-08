@@ -206,40 +206,56 @@
     // Route by media type before applying playability. A Series is a folder
     // and therefore correctly fails canPlay(), but it is still a supported
     // navigation target with its own screen seam for S4 to replace.
-    function showItem(item, returnTo) {
+    function showItem(item, returnTo, onPlaybackRequested) {
         if (item && item.Type === 'Series') {
             showSeries(item, returnTo);
             return;
         }
-        showDetail(item, returnTo);
+        showDetail(item, returnTo, onPlaybackRequested);
     }
 
-    // `seasonId` is what the viewer was last looking at inside this show.
-    // Coming back from an episode's Detail page has to land on that season
-    // again -- returning to season 1 after browsing season 5 is a worse exit
-    // than the S3 seam's, which had no state to lose. The screen reports each
-    // change through onSeasonChange, and the local `state` object is what
-    // carries it into the return closure below.
-    function showSeries(item, returnTo, seasonId) {
+    // Navigation-local Series state carries both the selected season and the
+    // ordered episode response across an Episode Detail round trip. Merely
+    // inspecting an episode cannot change its UserData, so that return may
+    // reuse the response. Any playback request invalidates it immediately:
+    // playback can change progress, and stale progress would make Resume and
+    // Continue wrong on return. A rejected request also invalidates
+    // conservatively. Leaving this navigation flow (including switching
+    // profiles) drops the closure and therefore the cache; nothing is global.
+    // This governs later renders only. Playback finishing does not recompute
+    // actions on an already-mounted Series or Detail screen; that is a known
+    // app-wide property, byte-identical before this cache, and separate work.
+    function showSeries(item, returnTo, seriesState) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
-        var state = { seasonId: seasonId || null };
+        var state = seriesState || { seasonId: null, episodes: null };
         window.JellyQuestSeriesScreen.render(window.JellyQuestShell.getContent(), item, {
             onBack: returnTo,
             initialSeasonId: state.seasonId,
+            initialEpisodes: state.episodes,
             onSeasonChange: function (changedTo) { state.seasonId = changedTo; },
+            onEpisodesLoaded: function (episodes) { state.episodes = episodes; },
+            onPlay: function (episode, startPositionTicks) {
+                state.episodes = null;
+                return requestPlayback(episode, {
+                    ids: [episode.Id],
+                    startPositionTicks: startPositionTicks
+                });
+            },
             // An episode opens its Detail page rather than playing outright
             // (household decision 5): instant play would save one press and
             // lose Start Over, My List and any future track choice. Episode
             // routing and playback already work -- showItem() sends a
             // non-Series item to showDetail().
             onSelectItem: function (episode) {
-                showItem(episode, function () { showSeries(item, returnTo, state.seasonId); });
+                showItem(episode, function () { showSeries(item, returnTo, state); }, function () {
+                    state.episodes = null;
+                });
             }
         });
     }
 
-    function showDetail(item, returnTo) {
+    function showDetail(item, returnTo, onPlaybackRequested) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
         var container = window.JellyQuestShell.getContent();
@@ -267,6 +283,7 @@
         }
         window.JellyQuestDetailScreen.render(container, item, {
             onPlay: function (playItem, startPositionTicks) {
+                if (onPlaybackRequested) onPlaybackRequested();
                 return requestPlayback(playItem, { ids: [playItem.Id], startPositionTicks: startPositionTicks });
             },
             // Trailers go through jellyfin-web's own playTrailers()

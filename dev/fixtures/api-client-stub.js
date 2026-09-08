@@ -203,6 +203,21 @@
         'user-charlie': {},
     };
 
+    // CANNED server answers, not a reimplementation of Jellyfin's
+    // personalized selection algorithm. The pinned jellyfin-web calls
+    // getNextUpEpisodes with SeriesId/UserId and consumes result.Items[0]
+    // (components/playback/playbackmanager.js:1981-1991); the pinned
+    // generated Jellyfin client establishes /Shows/NextUp, SeriesId, Limit,
+    // EnableRewatching (whether watched episodes may be returned), and the
+    // BaseItemDtoQueryResult response shape
+    // (tv-shows-api.js:110-198). Which episode Jellyfin chooses is server
+    // policy and is deliberately represented as fixture data instead of a
+    // friendlier guessed algorithm.
+    var NEXT_UP = {
+        'user-bob': { 'series-1': 'episode-1' },
+        'user-charlie': { 'series-1': 'episode-1' },
+    };
+
     // ---- What a LIST response actually contains -------------------------
     //
     // Same principle as the getItems option guard below, in the other
@@ -451,8 +466,24 @@
             var page = typeof limit === 'number' ? sorted.slice(start, start + limit) : sorted.slice(start);
             return Promise.resolve({ Items: page.map(projectListFields), TotalRecordCount: sorted.length });
         },
-        // NOT MODELED: getNextUpEpisodes. Its personalized episode-selection
-        // semantics were never probed, so inventing a response would be unsafe.
+        // Source-confirmed TRANSPORT semantics around a canned server answer;
+        // see NEXT_UP above. This does not guess how the server selects it.
+        getNextUpEpisodes: function (options) {
+            options = options || {};
+            validateShowOptions('getNextUpEpisodes', options,
+                ['UserId', 'userId', 'SeriesId', 'seriesId', 'Limit', 'limit', 'Fields', 'EnableRewatching']);
+            var seriesId = options.SeriesId === undefined ? options.seriesId : options.SeriesId;
+            var userId = options.UserId || options.userId || currentUserId;
+            var limit = options.Limit === undefined ? options.limit : options.Limit;
+            if (typeof seriesId !== 'string') throw new Error('Unmodeled SeriesId');
+            if (limit !== undefined && (typeof limit !== 'number' || limit < 0 || limit % 1 !== 0)) throw new Error('Unmodeled Limit');
+            if (options.EnableRewatching !== undefined && typeof options.EnableRewatching !== 'boolean') throw new Error('Unmodeled EnableRewatching');
+            var itemId = NEXT_UP[userId] && NEXT_UP[userId][seriesId];
+            var item = itemId && EPISODES.filter(function (episode) { return episode.Id === itemId; })[0];
+            var items = item ? [projectShowFields(withUserData(item, userId), options.Fields)] : [];
+            if (limit !== undefined) items = items.slice(0, limit);
+            return Promise.resolve({ Items: items, TotalRecordCount: items.length });
+        },
         // NOT MODELED: startItemId. Pinned playbackmanager.js sends this key;
         // the strict option guard below deliberately rejects it until modeled.
         // MEASURED against Jellyfin 10.11.11: a call without a season returns

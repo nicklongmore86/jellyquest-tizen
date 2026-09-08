@@ -2,11 +2,10 @@
 // list. Replaces the inert S3 seam (PR #31), which rendered a title, a Back
 // button and "Series browsing is not available yet."
 //
-// A Series is not itself playable, so this screen has no playback action of
-// its own: selecting an episode routes to the Detail screen (household
-// decision 5 -- instant play would save one press but lose Start Over, My
-// List and any future track choice). app.js already routes an Episode to
-// Detail and plays it with { ids, serverId, startPositionTicks }.
+// A Series is not itself playable. Its Resume / Continue / Restart Episode
+// actions resolve to concrete Episodes, while selecting an episode still
+// routes to the Detail screen (household decision 5 -- instant play would
+// save one press but lose Start Over, My List and any future track choice).
 //
 // ---- Why a dropdown rather than a row of season posters ----------------
 //
@@ -27,9 +26,9 @@
 // option and sorts the response itself (orderEpisodes below).
 //
 // `Limit` IS honoured (TotalRecordCount stays pre-Limit), but this screen
-// does not page: a partial page cannot be ordered correctly when the
-// ordering is ours to do, so a season is fetched whole and the MOUNTING is
-// what gets bounded (see "Why this windows" below).
+// does not page: a partial page cannot select the most recent resumable
+// episode or its successor correctly when ordering is ours to do, so the
+// series is fetched whole and the MOUNTING is what gets bounded below.
 //
 // IsMissing:false and IsVirtualUnaired:false are always sent. MEASURED: PAW
 // Patrol carries 129 VIRTUAL episode records on top of its 346 real ones, so
@@ -65,8 +64,8 @@
     // in library.js is the authority; the one in mountEpisodes() restates the
     // same arithmetic for the same constants.
     //
-    // Season partitioning is what makes the bound generous in practice --
-    // this screen mounts one season, never a whole series -- but it is not
+    // Season partitioning is what makes the mount bound generous in practice
+    // -- this screen mounts one season, never a whole series -- but it is not
     // itself a bound. The measured 346/13 aggregate for PAW Patrol says
     // nothing about how episodes distribute across seasons (the fixture's own
     // per-season split is INFERRED, not probed), and a single-season show of
@@ -77,7 +76,8 @@
     var EDGE_ROWS = 2;
 
     // callbacks: {
-    //   onBack(), onSelectItem(episode),
+    //   onBack(), onSelectItem(episode), onPlay(episode, startTicks) -> Promise,
+    //   initialEpisodes, onEpisodesLoaded(orderedEpisodes),
     //   initialSeasonId  -- the season to open on, so returning from an
     //                       episode's Detail page comes back to the season
     //                       the viewer was actually in,
@@ -103,6 +103,15 @@
         back.addEventListener('click', callbacks.onBack);
         container.appendChild(back);
 
+        var actions = document.createElement('div');
+        actions.className = 'jq-row jq-detail-actions jq-series-actions';
+        container.appendChild(actions);
+
+        var playError = document.createElement('p');
+        playError.className = 'jq-detail-error jq-series-play-error';
+        playError.hidden = true;
+        container.appendChild(playError);
+
         var controls = document.createElement('div');
         controls.className = 'jq-series-controls';
         container.appendChild(controls);
@@ -120,8 +129,10 @@
         container.appendChild(grid);
 
         var seasonButton = null;
+        var seasons = [];
         var currentSeasonId = null;
-        // Guards a late episode response against a newer season selection.
+        var allEpisodes = null;
+        // Guards a late whole-series response against a retry.
         var episodeRequest = 0;
         // Replaced wholesale by each mountEpisodes(); the grid's own focus
         // listener is registered once, below, and dispatches into whatever
@@ -189,7 +200,7 @@
             return apiClient.getSeasons(item.Id, { UserId: userId });
         }).then(function (result) {
             if (!isCurrentRender()) return; // navigated away, or re-entered
-            var seasons = (result && result.Items) || [];
+            seasons = (result && result.Items) || [];
             if (!seasons.length) {
                 // A real library state, not an edge case to skip: MEASURED,
                 // the household's NHL series has zero seasons and zero
@@ -198,8 +209,22 @@
                 window.JellyQuestFocus.focusFirst(container, focusAtRequest);
                 return;
             }
-            buildSeasonControl(seasons);
-            selectSeason(initialSeason(seasons), focusAtRequest);
+            var selectedSeason = initialSeason(seasons);
+            currentSeasonId = selectedSeason.Id;
+            buildSeasonControl(seasons, selectedSeason);
+            var cachedEpisodes = callbacks.initialEpisodes;
+            var cacheMatches = Array.isArray(cachedEpisodes) && cachedEpisodes.every(function (episode) {
+                return episode.SeriesId === item.Id;
+            });
+            if (cacheMatches) {
+                allEpisodes = callbacks.initialEpisodes;
+                var cachedToken = episodeRequest;
+                prepareEpisodes(focusAtRequest, cachedToken).catch(function (error) {
+                    showEpisodeFailure(error, focusAtRequest, cachedToken, 'Cached Series episodes failed:');
+                });
+            } else {
+                loadEpisodes(focusAtRequest);
+            }
         }).catch(function (error) {
             if (!isCurrentRender()) return;
             setStatus('Couldn’t load this show’s seasons. Try again.', true);
@@ -221,16 +246,17 @@
             return 'Season';
         }
 
-        function buildSeasonControl(seasons) {
+        function buildSeasonControl(seasons, selectedSeason) {
             seasonButton = document.createElement('button');
             seasonButton.className = 'jq-series-season-button jq-focusable';
             seasonButton.setAttribute('aria-haspopup', 'true');
+            // Establish the retry control's label before episode loading. The
+            // fetch failure path never reaches selectSeasonById().
+            seasonButton.textContent = seasonLabel(selectedSeason) + ' ▾';
             controls.appendChild(seasonButton);
-            // The season control is where the viewer wants to be once the
-            // show has loaded, and it is what the anchored focusFirst() calls
-            // below aim at. Move the marker off Back rather than adding a
-            // second one: focusInto() takes the FIRST [data-jq-autofocus] in
-            // the container, and two would make the answer positional.
+            // This remains the autofocus target when the show has no
+            // playback action. renderActions() moves it to Resume/Continue
+            // when one exists. There must only ever be one marker.
             back.removeAttribute('data-jq-autofocus');
             seasonButton.setAttribute('data-jq-autofocus', '');
 
@@ -255,9 +281,8 @@
                 option.textContent = seasonLabel(season);
                 option.addEventListener('click', function () {
                     closeMenu();
-                    // ANCHOR, again captured after focus has been placed
-                    // (closeModal() has just restored it to the season
-                    // button) and before the episode request goes out.
+                    // closeModal() has restored focus to this still-painted
+                    // selector before changing the mounted season.
                     selectSeason(season, document.activeElement);
                 });
                 menu.appendChild(option);
@@ -307,42 +332,143 @@
             if (markCurrentSeason) markCurrentSeason();
             if (callbacks.onSeasonChange) callbacks.onSeasonChange(season.Id);
 
-            // Unmount the previous season's cards NOW, not when the response
-            // lands. The cursor is on the season button at this moment
-            // (closeModal restored it there), but it would be free to walk
-            // down into the old cards during the request, and removing the
-            // focused node is how a television ends up with no cursor.
+            unmountEpisodes();
+            if (!allEpisodes) {
+                loadEpisodes(focusAnchor);
+                return;
+            }
+            mountCurrentSeason();
+        }
+
+        // One whole-series fetch serves BOTH playback selection and every
+        // season switch. A bounded prefix cannot be correct: MEASURED, this
+        // endpoint ignores Filters/SortBy/SortOrder, so the newest resumable
+        // record may occur anywhere (positions 38, 56 and 73 in the probe).
+        // Limit is therefore deliberately absent. IsMissing/IsVirtualUnaired
+        // are always false so PAW Patrol's 129 virtual placeholders do not
+        // join its 346 real episodes.
+        function loadEpisodes(focusAnchor) {
             unmountEpisodes();
             setStatus('Loading episodes…', false);
-
             var token = ++episodeRequest;
-            // No SortBy/SortOrder/Filters: MEASURED, this endpoint accepts
-            // and ignores all three (see the header). The two false switches
-            // are what keep virtual placeholder records out.
             Promise.resolve().then(function () {
                 return apiClient.getEpisodes(item.Id, {
                     UserId: userId,
-                    SeasonId: season.Id,
                     IsMissing: false,
                     IsVirtualUnaired: false
                 });
             }).then(function (result) {
                 if (!isCurrentRender() || token !== episodeRequest) return;
-                var episodes = orderEpisodes((result && result.Items) || []);
-                if (!episodes.length) setStatus('No episodes in this season yet.', false);
-                else {
-                    clearStatus();
-                    mountEpisodes(episodes);
-                }
-                window.JellyQuestFocus.focusFirst(container, focusAnchor);
+                allEpisodes = orderEpisodes((result && result.Items) || []);
+                if (callbacks.onEpisodesLoaded) callbacks.onEpisodesLoaded(allEpisodes);
+                return prepareEpisodes(focusAnchor, token);
             }).catch(function (error) {
-                if (!isCurrentRender() || token !== episodeRequest) return;
-                // Re-selecting the same season re-runs this request, so the
-                // dropdown is the retry path and it stays reachable.
-                setStatus('Couldn’t load this season’s episodes. Try again.', true);
-                window.JellyQuestFocus.focusFirst(container, focusAnchor);
-                console.error('[JellyQuest] Series episodes failed:', error);
+                showEpisodeFailure(error, focusAnchor, token, 'Series episodes failed:');
             });
+        }
+
+        function prepareEpisodes(focusAnchor, token) {
+            return resolvePlaybackActions(allEpisodes).catch(function (error) {
+                playError.textContent = 'Couldn’t load playback actions. Browse episodes below.';
+                playError.hidden = false;
+                console.error('[JellyQuest] Series playback actions failed:', error);
+            }).then(function () {
+                if (!isCurrentRender() || token !== episodeRequest || !allEpisodes) return;
+                selectSeasonById(currentSeasonId);
+                window.JellyQuestFocus.focusFirst(container, focusAnchor);
+            });
+        }
+
+        function showEpisodeFailure(error, focusAnchor, token, logLabel) {
+            if (!isCurrentRender() || token !== episodeRequest) return;
+            allEpisodes = null;
+            setStatus('Couldn’t load this show’s episodes. Try again.', true);
+            window.JellyQuestFocus.focusFirst(container, focusAnchor);
+            console.error('[JellyQuest] ' + logLabel, error);
+        }
+
+        function selectSeasonById(seasonId) {
+            var season = null;
+            var index;
+            for (index = 0; index < seasons.length; index++) {
+                if (seasons[index].Id === seasonId) {
+                    season = seasons[index];
+                    break;
+                }
+            }
+            if (!season) season = seasons[0];
+            currentSeasonId = season.Id;
+            seasonButton.textContent = seasonLabel(season) + ' ▾';
+            if (markCurrentSeason) markCurrentSeason();
+            if (callbacks.onSeasonChange) callbacks.onSeasonChange(season.Id);
+            mountCurrentSeason();
+        }
+
+        function mountCurrentSeason() {
+            var episodes = allEpisodes.filter(function (episode) {
+                return episode.SeasonId === currentSeasonId || episode.ParentId === currentSeasonId;
+            });
+            if (!episodes.length) setStatus('No episodes in this season yet.', false);
+            else {
+                clearStatus();
+                mountEpisodes(episodes);
+            }
+        }
+
+        function resolvePlaybackActions(episodes) {
+            actions.innerHTML = '';
+            playError.hidden = true;
+            seasonButton.setAttribute('data-jq-autofocus', '');
+            var resumable = mostRecentInProgress(episodes);
+            if (resumable) {
+                renderActions(resumable, episodeAfter(episodes, resumable));
+                return Promise.resolve();
+            }
+            if (typeof apiClient.getNextUpEpisodes !== 'function') {
+                return Promise.reject(new Error('ApiClient.getNextUpEpisodes is unavailable'));
+            }
+            return Promise.resolve().then(function () {
+                return apiClient.getNextUpEpisodes({
+                    SeriesId: item.Id,
+                    UserId: userId,
+                    Limit: 1,
+                    EnableRewatching: false
+                });
+            }).then(function (result) {
+                var nextUp = result && result.Items && result.Items[0];
+                renderActions(null, nextUp || null);
+            });
+        }
+
+        function renderActions(resumable, continueEpisode) {
+            var primary = null;
+            if (resumable) {
+                primary = appendAction('Resume', resumable, resumable.UserData.PlaybackPositionTicks);
+            } else if (continueEpisode) {
+                primary = appendAction('Continue', continueEpisode, 0);
+            }
+            if (resumable && continueEpisode) appendAction('Continue', continueEpisode, 0);
+            if (resumable) appendAction('Restart Episode', resumable, 0);
+            if (primary) {
+                seasonButton.removeAttribute('data-jq-autofocus');
+                primary.setAttribute('data-jq-autofocus', '');
+            }
+        }
+
+        function appendAction(label, episode, startTicks) {
+            var button = document.createElement('button');
+            button.className = 'jq-detail-action jq-focusable';
+            button.textContent = label;
+            button.addEventListener('click', function () {
+                playError.hidden = true;
+                Promise.resolve(callbacks.onPlay(episode, startTicks)).catch(function (error) {
+                    playError.textContent = 'Could not start playback. Try again.';
+                    playError.hidden = false;
+                    console.error('[JellyQuest] Series playback failed:', error);
+                });
+            });
+            actions.appendChild(button);
+            return button;
         }
 
         function unmountEpisodes() {
@@ -448,8 +574,9 @@
             // range can contain the focused index. Guaranteed by that
             // arithmetic, not by a runtime assertion.
             //
-            // Unlike library.js there is no paging caller: a season arrives
-            // whole, so `items` never grows and this is the only mutator.
+            // Unlike library.js there is no paging caller: the series arrives
+            // whole and this season partition never grows, so this is the
+            // only mutator.
             episodeWindow = {
                 onFocus: function (focused) {
                     var focusedIndex = focused._jqSeriesIndex;
@@ -490,6 +617,27 @@
                 || (a.index - b.index);
         });
         return decorated.map(function (entry) { return entry.episode; });
+    }
+
+    function mostRecentInProgress(episodes) {
+        var selected = null;
+        var selectedTime = -Infinity;
+        episodes.forEach(function (episode) {
+            var userData = episode.UserData || {};
+            if (!(userData.PlaybackPositionTicks > 0)) return;
+            var playedTime = Date.parse(userData.LastPlayedDate || '');
+            if (isNaN(playedTime)) playedTime = -Infinity;
+            if (!selected || playedTime > selectedTime) {
+                selected = episode;
+                selectedTime = playedTime;
+            }
+        });
+        return selected;
+    }
+
+    function episodeAfter(episodes, episode) {
+        var index = episodes.indexOf(episode);
+        return index >= 0 && index + 1 < episodes.length ? episodes[index + 1] : null;
     }
 
     // Explicit branches rather than a sentinel: a numeric sentinel large
