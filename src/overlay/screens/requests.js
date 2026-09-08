@@ -27,14 +27,6 @@
         container.innerHTML = '';
         container.className = 'jq-requests-screen';
 
-        // Where the cursor sits as this render begins, so the one focus
-        // call that lands after the bridge round trips (renderSearch's,
-        // below) can be suppressed if the user has moved on since. See
-        // focusFirst()'s expectedFocus guard in focus.js. The two
-        // focusFirst() calls in this function are synchronous with this
-        // line and cannot be overtaken, so they pass no expectation.
-        var focusAtRequest = document.activeElement;
-
         var status = document.createElement('p');
         status.className = 'jq-requests-status';
         container.appendChild(status);
@@ -58,6 +50,25 @@
 
         var bridge = window.JellyQuestRequestsBridge;
         status.textContent = 'Checking Requests for this profile…';
+
+        // What the guard in focusFirst() (focus.js) compares against when
+        // renderSearch's focus call lands, two bridge round trips from now:
+        // if the cursor has moved by then, the user moved it, and that newer
+        // intent wins.
+        //
+        // Captured HERE -- after every synchronous focus placement this
+        // render performs, immediately before the first await -- and not at
+        // the top of the function, because this render moves focus itself.
+        // Arriving from Retry, the button that was pressed lived inside
+        // `container` and innerHTML = '' above detached it, so
+        // document.activeElement is <body> at function entry; the
+        // focusFirst() a few lines up then finds nothing focusable in the
+        // screen yet and falls back to the rail. Capturing before that ran
+        // recorded <body>, so the settled rail focus read as the user having
+        // moved, and Retry's successful render never focused its search box.
+        // The distinction this line draws is the whole point: focus this
+        // render placed is not intent, focus that appears during the wait is.
+        var focusAtRequest = document.activeElement;
 
         bridge.checkEligibility(config.bridgeUrl, config.userId, config.userName).then(function (eligible) {
             if (!eligible) {
