@@ -662,6 +662,7 @@ test('a failed episode request says so, and re-choosing the season is the retry'
 
     assert.equal(await page.locator('.jq-series-episodes .jq-media-card').count(), 0);
     assert.equal((await focusSnapshot(page)).className.includes('jq-series-season-button'), true);
+    assert.equal(await page.locator('.jq-series-season-button').textContent(), 'Season 1 ▾');
     await assertPainted(page.locator('.jq-series-status'));
 
     await page.evaluate(() => { window.__failEpisodes = false; });

@@ -209,8 +209,9 @@
                 window.JellyQuestFocus.focusFirst(container, focusAtRequest);
                 return;
             }
-            buildSeasonControl(seasons);
-            currentSeasonId = initialSeason(seasons).Id;
+            var selectedSeason = initialSeason(seasons);
+            currentSeasonId = selectedSeason.Id;
+            buildSeasonControl(seasons, selectedSeason);
             var cachedEpisodes = callbacks.initialEpisodes;
             var cacheMatches = Array.isArray(cachedEpisodes) && cachedEpisodes.every(function (episode) {
                 return episode.SeriesId === item.Id;
@@ -245,10 +246,13 @@
             return 'Season';
         }
 
-        function buildSeasonControl(seasons) {
+        function buildSeasonControl(seasons, selectedSeason) {
             seasonButton = document.createElement('button');
             seasonButton.className = 'jq-series-season-button jq-focusable';
             seasonButton.setAttribute('aria-haspopup', 'true');
+            // Establish the retry control's label before episode loading. The
+            // fetch failure path never reaches selectSeasonById().
+            seasonButton.textContent = seasonLabel(selectedSeason) + ' ▾';
             controls.appendChild(seasonButton);
             // This remains the autofocus target when the show has no
             // playback action. renderActions() moves it to Resume/Continue
