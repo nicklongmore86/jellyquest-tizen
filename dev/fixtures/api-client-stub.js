@@ -207,16 +207,21 @@
         // and she is reachable from no other spec, so this history cannot
         // move any existing screen's assertions.
         //
-        //   Northern Stories 1  S8 E5 watched to the end (position 0, so it
+        //   Northern Stories 1  S8 E8 watched to the end (position 0, so it
         //                       is NOT resumable). MEASURED (Love Island,
         //                       72/73 played): with no resumable episode the
         //                       endpoint returns the first unplayed episode
-        //                       after watched progress -- here episode-111.
+        //                       after watched progress -- here episode-114.
+        //                       That episode deliberately has no Primary
+        //                       still, because it is the card that SURVIVES
+        //                       EnableResumable: false and so is the only
+        //                       place the parent-backdrop artwork tier can be
+        //                       exercised on this path.
         //   PAW Patrol          S7 E7 in progress. MEASURED (Pixel Move,
         //                       PlayedPercentage 66.2): an in-progress
         //                       episode is returned ITSELF.
         'user-dana': {
-            'episode-110': { LastPlayedDate: '2026-09-09T12:00:00Z', PlaybackPositionTicks: 0, Played: true, IsFavorite: false },
+            'episode-113': { LastPlayedDate: '2026-09-09T12:00:00Z', PlaybackPositionTicks: 0, Played: true, IsFavorite: false },
             'episode-523': { LastPlayedDate: '2026-09-05T12:00:00Z', PlaybackPositionTicks: 600 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
         },
     };
@@ -241,7 +246,7 @@
         'user-alice': { 'series-paw-patrol': 'episode-516' },
         'user-bob': { 'series-1': 'episode-1' },
         'user-charlie': { 'series-1': 'episode-1' },
-        'user-dana': { 'series-1': 'episode-111', 'series-paw-patrol': 'episode-523' },
+        'user-dana': { 'series-1': 'episode-114', 'series-paw-patrol': 'episode-523' },
     };
 
     // The LIBRARY-WIDE /Shows/NextUp answer -- a SEPARATE canned table, not a
@@ -264,6 +269,9 @@
     //   * ORDER is server policy -- descending MOST RECENT ACTIVITY ANYWHERE
     //     IN THE SERIES, not the returned episode's own date. Reproduced in
     //     Dana's list below.
+    //   * EnableResumable: false removes EXACTLY the items with saved
+    //     progress and preserves the order of the rest; it does NOT
+    //     substitute a replacement episode for a removed one.
     //
     // Which items a server picks is server policy and stays fixture data.
     // What is modelled below the table is TRANSPORT: Limit, StartIndex,
@@ -276,23 +284,25 @@
     // are therefore exercised at Limit 1 in the tests rather than at Home's
     // Limit of 8, which never truncates against this fixture.
     //
-    // Alice's single entry is the in-progress episode-516 ITSELF, which is
-    // also in her IsResumable Continue Watching row: MEASURED, that overlap
-    // is what this endpoint really does. Upstream's home section suppresses
-    // it with EnableResumable: false (nextUp.ts:31); that switch is NOT in
-    // the measured truth table, so neither the overlay nor this fixture
-    // pretends to know what it does.
+    // These are the BASELINE lists -- what the endpoint returns with no
+    // EnableResumable in the query. They deliberately contain the resumable
+    // overlap with Continue Watching that the real endpoint has: MEASURED, an
+    // in-progress episode is returned by this call ITSELF, and 7 of Nick's 15
+    // baseline items (47%) and 2 of Kids' 3 (67%) were already on the
+    // Continue Watching row. Suppression is applied below from
+    // EnableResumable, not baked into these lists, so a caller that omits the
+    // parameter still sees the duplication the real server would send.
     var NEXT_UP_LIBRARY = {
         'user-alice': ['episode-516'],
         'user-bob': [],
         'user-charlie': [],
         // Ordered by MOST RECENT ACTIVITY IN THE SERIES: Northern Stories 1
         // was touched on 2026-09-09 and PAW Patrol on 2026-09-05. Note that
-        // the LEADING item, episode-111, has never been played and carries no
+        // the LEADING item, episode-114, has never been played and carries no
         // date of its own, while episode-523 behind it carries a real one --
         // the measured Blaze divergence, reproduced. Re-sorting by the
         // RETURNED item's date inverts this pair.
-        'user-dana': ['episode-111', 'episode-523'],
+        'user-dana': ['episode-114', 'episode-523'],
     };
 
     // EnableRewatching=true was MEASURED to change selection SUBSTANTIALLY:
@@ -307,7 +317,7 @@
         'user-alice': ['episode-516', 'episode-427'],
         'user-bob': [],
         'user-charlie': [],
-        'user-dana': ['episode-111', 'episode-110', 'episode-523'],
+        'user-dana': ['episode-114', 'episode-113', 'episode-523'],
     };
 
     // ---- What a LIST response actually contains -------------------------
@@ -410,7 +420,8 @@
     // Jellyfin 10.11.11, library-wide with no SeriesId:
     //
     //   HONOURED                     Limit, StartIndex, Fields,
-    //                                EnableRewatching, NextUpDateCutoff,
+    //                                EnableRewatching, EnableResumable,
+    //                                NextUpDateCutoff,
     //                                EnableTotalRecordCount, ParentId
     //   ACCEPTED AND SILENTLY        SortBy, SortOrder, IsMissing,
     //   IGNORED                      IsVirtualUnaired
@@ -429,6 +440,23 @@
     // both returned the byte-identical baseline, so the fixture would be
     // inventing behaviour nobody observed.
     //
+    // EnableResumable was MEASURED against the accept-and-ignore trap
+    // specifically, because matching the baseline with `true` alone would have
+    // been inconclusive -- an ignored option matches the baseline too. What
+    // establishes that it is HONOURED is the `false` DELTA:
+    //
+    //   Nick  baseline 15 items / 26,195 bytes / sha b0898ecf
+    //         false     8 items / 13,939 bytes / sha 7038da41
+    //   Kids  baseline  3 items /  5,433 bytes / sha b18b27a7
+    //         false     1 item  /  1,830 bytes / sha 170d3e99
+    //
+    // TotalRecordCount tracks it (15 -> 8, 3 -> 1), so the count is taken
+    // AFTER suppression here, not before. MEASURED, the removed ids are
+    // EXACTLY the ones already on the profile's Continue Watching row, the
+    // surviving order is the baseline order, and nothing is substituted for a
+    // removed card. MEASURED, it does not mask EnableRewatching either: the
+    // same ids are removed with rewatching off or on (15 -> 8 and 19 -> 12).
+    //
     // UserId is REQUIRED, with no fall back to the signed-in user. The
     // endpoint is user-scoped -- MEASURED, the Kids profile got exactly its
     // own 3 items and no Nick-only series leaked -- and upstream's own home
@@ -439,7 +467,7 @@
     function nextUpLibraryWide(options) {
         validateShowOptions('getNextUpEpisodes (library-wide)', options,
             ['UserId', 'userId', 'Limit', 'limit', 'StartIndex', 'startIndex', 'Fields',
-                'EnableRewatching', 'SortBy', 'SortOrder', 'IsMissing', 'IsVirtualUnaired']);
+                'EnableRewatching', 'EnableResumable', 'SortBy', 'SortOrder', 'IsMissing', 'IsVirtualUnaired']);
         var userId = options.UserId === undefined ? options.userId : options.UserId;
         if (typeof userId !== 'string') throw new Error('Unmodeled UserId: the library-wide Next Up call must name a user');
         var limit = options.Limit === undefined ? options.limit : options.Limit;
@@ -447,6 +475,7 @@
         if (limit !== undefined && (typeof limit !== 'number' || limit < 0 || limit % 1 !== 0)) throw new Error('Unmodeled Limit');
         if (startIndex !== undefined && (typeof startIndex !== 'number' || startIndex < 0 || startIndex % 1 !== 0)) throw new Error('Unmodeled StartIndex');
         if (options.EnableRewatching !== undefined && typeof options.EnableRewatching !== 'boolean') throw new Error('Unmodeled EnableRewatching');
+        if (options.EnableResumable !== undefined && typeof options.EnableResumable !== 'boolean') throw new Error('Unmodeled EnableResumable');
         // Validated, then ignored -- see the note above.
         if (options.SortBy !== undefined && ITEM_SORTS.indexOf(options.SortBy) === -1) throw new Error('Unmodeled SortBy');
         if (options.SortOrder !== undefined && options.SortOrder !== 'Ascending' && options.SortOrder !== 'Descending') throw new Error('Unmodeled SortOrder');
@@ -457,6 +486,15 @@
         var selected = (table[userId] || []).map(function (itemId) {
             return EPISODES.filter(function (episode) { return episode.Id === itemId; })[0];
         }).filter(Boolean);
+        // Applied BEFORE the count, because MEASURED, TotalRecordCount tracks
+        // the suppression (15 -> 8). Omitting the parameter leaves the
+        // baseline list intact, duplication and all -- which is what makes an
+        // implementation that forgets it observably wrong rather than merely
+        // unvalidated.
+        if (options.EnableResumable === false) selected = selected.filter(function (episode) {
+            var data = (USER_DATA[userId] && USER_DATA[userId][episode.Id]) || {};
+            return !data.PlaybackPositionTicks;
+        });
         // MEASURED: TotalRecordCount survives Limit and reports the TRUE
         // pre-limit count (15, not 8).
         var total = selected.length;

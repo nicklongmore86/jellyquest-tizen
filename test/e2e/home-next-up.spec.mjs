@@ -4,8 +4,9 @@
 // Two halves, deliberately separated:
 //   * FIXTURE CONTRACT -- runs the stub in a bare vm context, no browser, and
 //     pins the transport semantics MEASURED against the household's Jellyfin
-//     10.11.11 (Limit/StartIndex honoured, TotalRecordCount pre-limit,
-//     SortBy/SortOrder/IsMissing/IsVirtualUnaired accepted-and-ignored).
+//     10.11.11 (Limit/StartIndex/EnableResumable honoured, TotalRecordCount
+//     pre-limit and tracking suppression, SortBy/SortOrder/IsMissing/
+//     IsVirtualUnaired accepted-and-ignored).
 //   * SCREEN BEHAVIOUR -- runs the real simulator and asserts what the viewer
 //     gets, including where focus lands and that it is PAINTED.
 import assert from 'node:assert/strict';
@@ -75,12 +76,12 @@ test('the fixture models a library-wide Next Up call and keeps the per-series on
     assert.deepEqual(Array.from(alice.Items, (item) => item.Id), ['episode-516']);
     assert.equal(alice.TotalRecordCount, 1);
     const dana = await api.getNextUpEpisodes({ UserId: 'user-dana', EnableRewatching: false });
-    assert.deepEqual(Array.from(dana.Items, (item) => item.Id), ['episode-111', 'episode-523']);
+    assert.deepEqual(Array.from(dana.Items, (item) => item.Id), ['episode-114', 'episode-523']);
     assert.equal(dana.TotalRecordCount, 2);
     assert.ok(dana.Items.every((item) => item.Type === 'Episode'));
     for (const [userId, seriesId, expected] of [
         ['user-alice', 'series-paw-patrol', 'episode-516'],
-        ['user-dana', 'series-1', 'episode-111'],
+        ['user-dana', 'series-1', 'episode-114'],
         ['user-dana', 'series-paw-patrol', 'episode-523'],
     ]) {
         const scoped = await api.getNextUpEpisodes({ SeriesId: seriesId, UserId: userId, Limit: 1 });
@@ -106,7 +107,7 @@ test('the library-wide fixture call must name a user', async () => {
 test('the library-wide fixture honours Limit and StartIndex and reports the true pre-limit total', async () => {
     const api = loadStub();
     const limited = await api.getNextUpEpisodes({ UserId: 'user-dana', Limit: 1 });
-    assert.deepEqual(Array.from(limited.Items, (item) => item.Id), ['episode-111']);
+    assert.deepEqual(Array.from(limited.Items, (item) => item.Id), ['episode-114']);
     assert.equal(limited.TotalRecordCount, 2, 'TotalRecordCount must survive Limit and report the pre-limit count');
 
     const offset = await api.getNextUpEpisodes({ UserId: 'user-dana', StartIndex: 1, Limit: 1 });
@@ -157,7 +158,7 @@ test('the library-wide fixture order is stable server policy, not the returned e
     // carries a real LastPlayedDate. Any client-side re-sort by the returned
     // episode's own date inverts this.
     const [lead, trailer] = first.Items;
-    assert.equal(lead.Id, 'episode-111');
+    assert.equal(lead.Id, 'episode-114');
     assert.equal(lead.UserData.LastPlayedDate, undefined, 'the lead item must have no play date of its own');
     assert.ok(trailer.UserData.LastPlayedDate, 'the trailing item must carry one');
 });
@@ -175,9 +176,12 @@ test('the library-wide fixture projects Fields onto the measured list shape', as
     assert.ok(projected.Items.every((item) => item.Overview), 'a requested Field must be projected');
     await assert.rejects(async () => api.getNextUpEpisodes({ UserId: 'user-dana', Fields: 'NotAField' }),
         /Unmodeled Fields value/);
-    // At least one Next Up item must lack its own still, or the artwork
-    // fallback tier is untested on this path.
-    assert.equal(plain.Items.filter((item) => !item.ImageTags.Primary).length, 1);
+    // A Next Up item that SURVIVES EnableResumable: false must lack its own
+    // still, or the artwork fallback tier is untested on the path the app
+    // actually takes.
+    const rendered = await api.getNextUpEpisodes({ UserId: 'user-dana', EnableResumable: false });
+    assert.ok(rendered.Items.length > 0);
+    assert.ok(Array.from(rendered.Items).every((item) => !item.ImageTags.Primary));
 });
 
 test('EnableRewatching changes the library-wide selection substantially', async () => {
@@ -196,18 +200,67 @@ test('EnableRewatching changes the library-wide selection substantially', async 
         /Unmodeled EnableRewatching/);
 });
 
+test('EnableResumable is HONOURED: false removes exactly the resumable items', async () => {
+    const api = loadStub();
+    // MEASURED, and the reason `true` is checked first: on this endpoint a
+    // matching baseline proves nothing on its own -- an accepted-and-ignored
+    // option matches the baseline too. What establishes that this one is
+    // honoured is the FALSE delta below (Nick 15 -> 8, Kids 3 -> 1).
+    const baseline = await api.getNextUpEpisodes({ UserId: 'user-dana' });
+    const kept = await api.getNextUpEpisodes({ UserId: 'user-dana', EnableResumable: true });
+    assert.equal(JSON.stringify(kept), JSON.stringify(baseline), 'true must return the baseline body');
+
+    const suppressed = await api.getNextUpEpisodes({ UserId: 'user-dana', EnableResumable: false });
+    assert.deepEqual(Array.from(baseline.Items, (item) => item.Id), ['episode-114', 'episode-523']);
+    assert.deepEqual(Array.from(suppressed.Items, (item) => item.Id), ['episode-114'],
+        'exactly the item with saved progress is removed, and the rest keep baseline order');
+    // TotalRecordCount tracks the suppression -- MEASURED 15 -> 8 and 3 -> 1.
+    assert.equal(baseline.TotalRecordCount, 2);
+    assert.equal(suppressed.TotalRecordCount, 1);
+    // Nothing is substituted for the removed card.
+    for (const item of suppressed.Items) {
+        assert.ok(baseline.Items.some((original) => original.Id === item.Id),
+            `${item.Id} is not in the baseline: suppression must not invent a replacement`);
+    }
+    // The removed item is exactly the one with playback progress, which is
+    // also what puts it on the Continue Watching row.
+    const removed = Array.from(baseline.Items).filter((item) =>
+        !suppressed.Items.some((survivor) => survivor.Id === item.Id));
+    assert.deepEqual(Array.from(removed, (item) => item.Id), ['episode-523']);
+    assert.ok(removed.every((item) => item.UserData.PlaybackPositionTicks > 0));
+    assert.ok(Array.from(suppressed.Items).every((item) => !item.UserData.PlaybackPositionTicks));
+
+    // A profile whose only candidate is resumable is left with nothing. This
+    // is a real, reachable state, not a fixture accident.
+    const alice = await api.getNextUpEpisodes({ UserId: 'user-alice', EnableResumable: false });
+    assert.deepEqual(Array.from(alice.Items), []);
+    assert.equal(alice.TotalRecordCount, 0);
+
+    await assert.rejects(async () => api.getNextUpEpisodes({ UserId: 'user-dana', EnableResumable: 'false' }),
+        /Unmodeled EnableResumable/);
+});
+
+test('EnableResumable and EnableRewatching do not mask each other', async () => {
+    const api = loadStub();
+    const both = await api.getNextUpEpisodes({ UserId: 'user-dana', EnableRewatching: true, EnableResumable: false });
+    const rewatchOnly = await api.getNextUpEpisodes({ UserId: 'user-dana', EnableRewatching: true });
+    // MEASURED: resumable suppression removes the same ids with rewatching off
+    // or on (15 -> 8 and 19 -> 12).
+    assert.deepEqual(Array.from(rewatchOnly.Items, (item) => item.Id), ['episode-114', 'episode-113', 'episode-523']);
+    assert.deepEqual(Array.from(both.Items, (item) => item.Id), ['episode-114', 'episode-113']);
+    assert.equal(both.TotalRecordCount, 2);
+});
+
 // ---- Screen behaviour -------------------------------------------------
+//
+// Dana is the profile whose Next Up row survives EnableResumable: false; see
+// the fixture. Alice's only candidate is her in-progress episode-516, so her
+// row is the measurably-reachable EMPTY case.
 
 test('Home renders Next Up between Continue Watching and Recently Added', async () => withPage(async (page) => {
-    await signIn(page, 'user-alice');
+    await signIn(page, 'user-dana');
     assert.deepEqual(await headings(page), ['Continue Watching', 'Next Up', 'Recently Added']);
-    assert.deepEqual(await rowIds(page, 'Next Up'), ['episode-516']);
-    // ACCEPTED, and MEASURED, not a bug: an in-progress episode is returned by
-    // this endpoint ITSELF, so it can appear in Continue Watching AND Next Up
-    // at once. Upstream's own home section suppresses that with
-    // EnableResumable: false, a switch outside the measured truth table, so
-    // this row does not send it and the overlap stands.
-    assert.ok((await rowIds(page, 'Continue Watching')).includes('episode-516'));
+    assert.deepEqual(await rowIds(page, 'Next Up'), ['episode-114']);
     // The row carries no "See All": the Library screen queries getItems, which
     // cannot express /Shows/NextUp.
     assert.equal(await page.evaluate(() =>
@@ -216,7 +269,42 @@ test('Home renders Next Up between Continue Watching and Recently Added', async 
             .parentElement.querySelectorAll('.jq-see-all').length), 0);
 }));
 
-test('Home asks for Next Up user-scoped, bounded, and without the ignored options', async () => withPage(async (page) => {
+test('a resumable episode already on Continue Watching does not come back in Next Up', async () => withPage(async (page) => {
+    // MEASURED: without EnableResumable: false this endpoint returns the
+    // in-progress episode ITSELF, and 47% of the largest profile's row (7 of
+    // 15) and 67% of the restricted profile's (2 of 3) were duplicates of
+    // Continue Watching cards.
+    await signIn(page, 'user-dana');
+    assert.deepEqual(await rowIds(page, 'Continue Watching'), ['episode-523']);
+    assert.deepEqual(await rowIds(page, 'Next Up'), ['episode-114'],
+        'the resumable episode must be suppressed, and nothing substituted for it');
+    const continueWatching = await rowIds(page, 'Continue Watching');
+    const nextUp = await rowIds(page, 'Next Up');
+    assert.deepEqual(nextUp.filter((id) => continueWatching.indexOf(id) !== -1), [],
+        'the two rows must share no card');
+    // And the suppressed episode is genuinely a Next Up candidate -- it is in
+    // the baseline the fixture would return without the parameter, so this
+    // asserts suppression rather than an absence that was never there.
+    const baseline = await page.evaluate(() =>
+        window.ApiClient.getNextUpEpisodes({ UserId: 'user-dana' })
+            .then((result) => result.Items.map((item) => item.Id)));
+    assert.deepEqual(baseline, ['episode-114', 'episode-523']);
+}));
+
+test('a profile whose only Next Up candidate is resumable renders no row at all', async () => withPage(async (page) => {
+    await signIn(page, 'user-alice');
+    assert.deepEqual(await headings(page), ['Continue Watching', 'Recently Added'],
+        'an empty Next Up must render nothing -- no row, no stray heading');
+    assert.equal(await rowIds(page, 'Next Up'), null);
+    assert.equal(await page.locator('.jq-home-empty').count(), 0,
+        'an empty row is not an error and must not print a message');
+    // episode-516 is on Continue Watching and nowhere else on the screen.
+    const onScreen = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('.jq-media-card'), (card) => card.getAttribute('data-item-id')));
+    assert.equal(onScreen.filter((id) => id === 'episode-516').length, 1);
+}));
+
+test('Home asks for Next Up user-scoped, bounded, resumable-suppressed, and without the ignored options', async () => withPage(async (page) => {
     await page.evaluate(() => {
         window.__nextUpCalls = [];
         const real = window.ApiClient.getNextUpEpisodes.bind(window.ApiClient);
@@ -225,38 +313,30 @@ test('Home asks for Next Up user-scoped, bounded, and without the ignored option
             return real(options);
         };
     });
-    await signIn(page, 'user-alice');
+    await signIn(page, 'user-dana');
     assert.deepEqual(await page.evaluate(() => window.__nextUpCalls), [
-        { UserId: 'user-alice', Limit: 8, EnableRewatching: false },
+        { UserId: 'user-dana', Limit: 8, EnableResumable: false, EnableRewatching: false },
     ]);
 }));
 
 test('a Next Up card routes to Episode Detail, exactly as Continue Watching does', async () => withPage(async (page) => {
     await signIn(page, 'user-dana');
-    // Scoped to the Next Up row: the point is that THIS row's card routes to
-    // Episode Detail, not that some card with the same id elsewhere does.
     await page.evaluate(() => {
         const heading = Array.from(document.querySelectorAll('.jq-home-row-heading'))
             .find((node) => node.textContent === 'Next Up');
-        heading.parentElement.querySelector('[data-item-id="episode-111"]').click();
+        heading.parentElement.querySelector('[data-item-id="episode-114"]').click();
     });
     await page.waitForSelector('.jq-detail-screen');
     const title = await page.locator('.jq-detail-title').textContent();
     assert.match(title, /Northern Stories 1/);
-    assert.match(title, /S8 E6 · Northern Journey 111/);
+    assert.match(title, /S8 E9 · Northern Journey 114/);
 }));
 
 test('a Next Up episode with no still of its own falls back to the parent backdrop', async () => withPage(async (page) => {
     await signIn(page, 'user-dana');
-    // Dana's in-progress episode is in Continue Watching too (the measured
-    // overlap), so every assertion here is scoped to the Next Up section.
     const nextUp = page.locator('.jq-home-row-section').nth(1);
     assert.equal(await nextUp.locator('.jq-home-row-heading').textContent(), 'Next Up');
-    // The screen renders the server's order verbatim. Dana's leading item has
-    // never been played and the one behind it carries a real play date, so a
-    // client-side re-sort by the returned item's own date inverts this pair.
-    assert.deepEqual(await rowIds(page, 'Next Up'), ['episode-111', 'episode-523']);
-    const card = nextUp.locator('[data-item-id="episode-523"]');
+    const card = nextUp.locator('[data-item-id="episode-114"]');
     await card.locator('img').evaluate((img) => img.complete && img.naturalWidth > 0
         ? null : new Promise((resolve) => { img.onload = resolve; }));
     const image = await card.locator('img').evaluate((img) =>
@@ -267,6 +347,31 @@ test('a Next Up episode with no still of its own falls back to the parent backdr
     await assertPainted(card);
 }));
 
+test('the row renders the server order verbatim and does not re-sort it', async () => withPage(async (page) => {
+    // The suppressed fixture row is one card, so the ordering guarantee is
+    // driven here from a two-item response in the MEASURED shape: the leading
+    // item has never been played (its SERIES has the most recent activity)
+    // while the one behind it carries a real play date. A client-side re-sort
+    // by the returned item's own date inverts the pair.
+    await page.evaluate(() => {
+        window.ApiClient.getNextUpEpisodes = () => Promise.resolve({
+            TotalRecordCount: 2,
+            Items: [
+                { Id: 'lead-episode', Name: 'Never Played', Type: 'Episode', ServerId: 'dev-server-1',
+                    SeriesId: 'series-1', SeriesName: 'Northern Stories 1', SeasonId: 'season-8',
+                    ParentIndexNumber: 8, IndexNumber: 9, ImageTags: { Primary: 'preview-v1' },
+                    UserData: { PlaybackPositionTicks: 0, Played: false } },
+                { Id: 'trailing-episode', Name: 'Played Earlier', Type: 'Episode', ServerId: 'dev-server-1',
+                    SeriesId: 'series-paw-patrol', SeriesName: 'PAW Patrol', SeasonId: 'season-30',
+                    ParentIndexNumber: 7, IndexNumber: 7, ImageTags: { Primary: 'preview-v1' },
+                    UserData: { PlaybackPositionTicks: 0, Played: true, LastPlayedDate: '2026-09-05T12:00:00Z' } },
+            ],
+        });
+    });
+    await signIn(page, 'user-dana');
+    assert.deepEqual(await rowIds(page, 'Next Up'), ['lead-episode', 'trailing-episode']);
+}));
+
 test('a profile with nothing in progress gets no Next Up row at all, and no other profile\'s items', async () => withPage(async (page) => {
     await signIn(page, 'user-bob');
     // Bob has no playback history at all, so Continue Watching is empty too.
@@ -275,7 +380,7 @@ test('a profile with nothing in progress gets no Next Up row at all, and no othe
     assert.equal(await rowIds(page, 'Next Up'), null);
     const onScreen = await page.evaluate(() =>
         Array.from(document.querySelectorAll('.jq-media-card')).map((card) => card.getAttribute('data-item-id')));
-    for (const leaked of ['episode-111', 'episode-523']) {
+    for (const leaked of ['episode-114', 'episode-523', 'episode-516']) {
         assert.equal(onScreen.includes(leaked), false, `${leaked} belongs to another profile and must not appear`);
     }
 }));
@@ -284,12 +389,12 @@ test('a failing Next Up degrades to a visible message and leaves the other rows 
     await page.evaluate(() => {
         window.ApiClient.getNextUpEpisodes = () => Promise.reject(new Error('next up is down'));
     });
-    await signIn(page, 'user-alice');
+    await signIn(page, 'user-dana');
     assert.deepEqual(await headings(page), ['Continue Watching', 'Recently Added']);
     const message = page.locator('.jq-home-empty');
     assert.equal(await message.textContent(), 'Next Up is unavailable right now.');
     await assertPainted(message);
-    assert.deepEqual(await rowIds(page, 'Continue Watching'), ['movie-1', 'episode-516', 'movie-3']);
+    assert.deepEqual(await rowIds(page, 'Continue Watching'), ['episode-523']);
     assert.ok((await rowIds(page, 'Recently Added')).length > 0);
 }));
 
@@ -298,7 +403,7 @@ test('row order is fixed by the screen, not by which fetch resolves first', asyn
     // while both getItems rows are still outstanding.
     for (const slow of ['next-up', 'get-items']) {
         await withPage(async (page) => {
-            await page.evaluate(() => document.querySelector('[data-profile-id="user-alice"]').click());
+            await page.evaluate(() => document.querySelector('[data-profile-id="user-dana"]').click());
             await page.waitForSelector('.jq-shell');
             await page.waitForFunction(() => window.__release.length > 0);
             await page.evaluate(() => window.__release.splice(0).forEach((release) => release()));
@@ -325,9 +430,10 @@ test('row order is fixed by the screen, not by which fetch resolves first', asyn
 });
 
 test('the new row does not move first-card autofocus, and Down from it reaches Next Up', async () => withPage(async (page) => {
-    await signIn(page, 'user-alice');
+    await signIn(page, 'user-dana');
     await page.waitForSelector('.jq-media-card');
-    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-1');
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'episode-523',
+        'autofocus stays on the first Continue Watching card');
     await assertPainted(page.locator(':focus'));
 
     await page.keyboard.press('ArrowDown');
@@ -338,17 +444,16 @@ test('the new row does not move first-card autofocus, and Down from it reaches N
             id: document.activeElement.getAttribute('data-item-id'),
             inNextUp: heading.parentElement.contains(document.activeElement),
         };
-    }), { id: 'episode-516', inNextUp: true });
+    }), { id: 'episode-114', inNextUp: true });
     await assertPainted(page.locator(':focus'));
 
     await page.keyboard.press('ArrowUp');
-    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-1');
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'episode-523');
 }));
 
 test('a profile whose Next Up is empty still autofocuses a painted first card', async () => withPage(async (page) => {
-    await signIn(page, 'user-bob');
+    await signIn(page, 'user-alice');
     await page.waitForSelector('.jq-media-card');
-    assert.equal(await page.evaluate(() =>
-        document.activeElement.classList.contains('jq-media-card')), true);
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-1');
     await assertPainted(page.locator(':focus'));
 }));

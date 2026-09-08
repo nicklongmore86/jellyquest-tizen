@@ -212,9 +212,8 @@ test('Home and Library use independent media queries and Library reaches beyond 
     await signIn(page);
     assert.deepEqual(await page.evaluate(() => window.__queries[0]), { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' });
     assert.deepEqual(await ids(page, '.jq-home-row-section:first-child .jq-media-card'), ['movie-1', 'episode-516', 'movie-3']);
-    // Recently Added is the THIRD section since Next Up joined Home.
-    assert.equal(await page.locator('.jq-home-row-section').nth(2).locator('.jq-media-card').count(), 8);
-    assert.ok((await ids(page, '.jq-home-row-section:nth-child(3) .jq-media-card')).includes('series-1'));
+    assert.equal(await page.locator('.jq-home-row-section').nth(1).locator('.jq-media-card').count(), 8);
+    assert.ok((await ids(page, '.jq-home-row-section:nth-child(2) .jq-media-card')).includes('series-1'));
     await page.locator('.jq-see-all').click();
     await page.waitForSelector('.jq-library-grid .jq-media-card');
     assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), 48);
@@ -378,9 +377,8 @@ test('Home row order and initial focus survive Recently Added resolving first', 
     // Flush the promise/render turn before releasing the first request.
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await page.evaluate(() => window.__releaseRows[0]());
-    await page.waitForFunction(() => document.querySelectorAll('.jq-home-row-heading').length === 3);
-    assert.deepEqual(await page.locator('.jq-home-row-heading').allTextContents(),
-        ['Continue Watching', 'Next Up', 'Recently Added']);
+    await page.waitForFunction(() => document.querySelectorAll('.jq-home-row-heading').length === 2);
+    assert.deepEqual(await page.locator('.jq-home-row-heading').allTextContents(), ['Continue Watching', 'Recently Added']);
     assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), 'movie-1');
 }));
 
@@ -439,10 +437,7 @@ test('Series activation has a visible explanation, Back, and no playback actions
 
 test('a resumable Episode enters the existing playback path with its server and saved position', async () => withPage(async page => {
     await signIn(page);
-    // Scoped to Continue Watching: this episode is in Next Up as well, which
-    // is the MEASURED behaviour of the library-wide /Shows/NextUp call -- an
-    // in-progress episode is returned by it ITSELF.
-    await page.locator('.jq-home-row-section').first().locator('[data-item-id="episode-516"]').click();
+    await page.locator('[data-item-id="episode-516"]').click();
     await page.waitForSelector('.jq-detail-action');
     await page.evaluate(() => { window.playbackManager.play = options => { window.__played = options; }; });
     await page.getByRole('button', { name: 'Resume', exact: true }).click();

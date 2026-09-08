@@ -2785,7 +2785,37 @@
             // Resume/Play/Start Over do the right thing per item. There is
             // deliberately no second selection algorithm in this screen.
             //
-            // Sent, and MEASURED as HONOURED: UserId, Limit, EnableRewatching.
+            // Sent, and MEASURED as HONOURED: UserId, Limit, EnableRewatching,
+            // EnableResumable.
+            //
+            // EnableResumable: false is what keeps this row from repeating
+            // Continue Watching. MEASURED, an in-progress episode is returned
+            // by this endpoint ITSELF, and the overlap was large, not
+            // cosmetic: 7 of the 15 baseline items on the largest profile
+            // (47%) and 2 of 3 on the restricted one (67%) were already
+            // Continue Watching cards. MEASURED, false removes EXACTLY those
+            // ids, keeps the rest in baseline order, substitutes nothing, and
+            // leaves both profiles non-empty (15 -> 8 and 3 -> 1).
+            //
+            // That it is HONOURED rather than accepted-and-ignored was
+            // established from the FALSE delta, not from true matching the
+            // baseline -- an ignored option matches the baseline too:
+            //   15 items / 26,195 bytes / sha b0898ecf -> 8 / 13,939 / 7038da41
+            //    3 items /  5,433 bytes / sha b18b27a7 -> 1 /  1,830 / 170d3e99
+            // TotalRecordCount tracks it. It also does not mask
+            // EnableRewatching: the same ids go with rewatching off or on.
+            // Upstream sends the same thing (.cache/jellyfin-web/src/
+            // components/homesections/sections/nextUp.ts:32).
+            //
+            // REJECTED ALTERNATIVE -- deduplicating against Continue
+            // Watching's ids here in the client. MEASURED, it yields the same
+            // survivors, so it buys nothing; it offers no extra cards to
+            // replace what it drops; it would couple this row to another
+            // row's results and to whichever resolves first; and it filters
+            // AFTER Limit, so a page of eight could arrive mostly duplicated
+            // and render two cards. The server does the same job before the
+            // limit is applied.
+            //
             // Deliberately NOT sent:
             //   SortBy/SortOrder     MEASURED accepted and SILENTLY IGNORED
             //                        here; the ignored variants came back
@@ -2825,7 +2855,9 @@
                     if (typeof window.ApiClient.getNextUpEpisodes !== 'function') {
                         return Promise.reject(new Error('ApiClient.getNextUpEpisodes is unavailable'));
                     }
-                    return window.ApiClient.getNextUpEpisodes({ UserId: userId, Limit: 8, EnableRewatching: false });
+                    return window.ApiClient.getNextUpEpisodes({
+                        UserId: userId, Limit: 8, EnableResumable: false, EnableRewatching: false
+                    });
                 },
                 seeAll: false,
             },
