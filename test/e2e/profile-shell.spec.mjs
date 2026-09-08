@@ -192,12 +192,11 @@ test('the rail itself: down/up move through its items, right leaves it for Home 
         await page.keyboard.press('ArrowDown');
         assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Requests');
         await assertPainted(page.locator(':focus'));
-        await page.keyboard.press('ArrowUp');
-        await page.keyboard.press('ArrowUp');
-        await page.keyboard.press('ArrowUp');
-        await page.keyboard.press('ArrowUp');
-        assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Alice');
-        await assertPainted(page.locator(':focus'));
+        for (const expected of ['Search', 'Shows', 'Home', 'Alice']) {
+            await page.keyboard.press('ArrowUp');
+            assert.equal(await page.evaluate(() => document.activeElement.textContent), expected);
+            await assertPainted(page.locator(':focus'));
+        }
 
         // Right from the rail re-enters Home's content.
         await page.keyboard.press('ArrowRight');

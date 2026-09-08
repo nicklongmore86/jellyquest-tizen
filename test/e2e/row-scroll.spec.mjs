@@ -128,8 +128,10 @@ async function assertMeasuredGeometry(page, cardHeight) {
 async function openViaRail(page, railClass) {
     await page.keyboard.press('ArrowLeft');
     await page.waitForFunction(() => document.activeElement.classList.contains('jq-rail-item'));
-    for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowUp');
-    for (let i = 0; i < 4; i++) {
+    const railSize = await page.locator('.jq-rail-item').count();
+    assert.ok(railSize > 0, 'the persistent rail must contain a destination');
+    for (let i = 0; i < railSize; i++) await page.keyboard.press('ArrowUp');
+    for (let i = 0; i < railSize; i++) {
         if (await page.evaluate((cls) => document.activeElement.classList.contains(cls), railClass)) break;
         await page.keyboard.press('ArrowDown');
     }

@@ -103,11 +103,17 @@
     // Generated dates keep movie-10 newest, with a Series beside it.
     var i;
     for (i = 1; i <= 42; i++) {
-        SERIES.push({ Id: 'series-' + i, Name: 'Northern Stories ' + i, Type: 'Series',
+        var fixtureSeries = { Id: 'series-' + i,
+            Name: i === 42 ? 'The Northern Stories 42' : 'Northern Stories ' + i, Type: 'Series',
             IsFolder: true, ParentId: 'shows', ServerId: SERVER_ID,
             ImageTags: { Primary: 'preview-v1' },
             DateCreated: i === 1 ? '2026-08-09T12:00:00Z' : '2025-01-01T00:00:00Z',
-            Overview: 'A fixture series with enough metadata for a full-item fetch.', LocalTrailerCount: 0 });
+            Overview: 'A fixture series with enough metadata for a full-item fetch.', LocalTrailerCount: 0 };
+        // A real display-name/sort-name divergence, so SortBy=SortName cannot
+        // accidentally pass by sorting Name instead. It remains a Northern
+        // title so search-result cardinality is unchanged.
+        if (i === 42) fixtureSeries.SortName = 'Northern Stories 42, The';
+        SERIES.push(fixtureSeries);
     }
     // MEASURED shapes: PAW Patrol is the deepest real series (346 episodes
     // over 13 seasons, plus 129 virtual placeholders); NHL has zero episodes.
