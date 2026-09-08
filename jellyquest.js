@@ -2408,12 +2408,19 @@
     // drops to the meta line; inside a show's own page the show name is
     // already on screen, so the episode's name leads.
     //
-    // `context` is 'browse' (the default -- Home, Library, Search) or
-    // 'series'. Nothing passes 'series' in production yet: S3's Series seam
-    // is deliberately an inert placeholder and renders no episode cards;
-    // S4 supplies that caller when it builds the browser. The 'browse' branch
-    // has a real caller -- Home's Continue Watching row queries
-    // 'Movie,Episode' (screens/home.js).
+    // `context` is 'browse' (the default -- Home, Library and Search all omit
+    // it) or 'series'. BOTH branches have a production caller now, which was
+    // not true before the Series browse screen replaced the inert S3 seam:
+    // an earlier revision of this comment said nothing passed 'series' yet,
+    // and named S4 as the caller that would.
+    //
+    //   'browse'  -- Home's Continue Watching row. It is the only list query
+    //                in the app that returns Episodes at all ('Movie,Episode',
+    //                screens/home.js); Library and Search both query
+    //                'Movie,Series' and so render no episode cards, which
+    //                means they never reach the Episode branch below.
+    //   'series'  -- the Series browse screen's episode grid
+    //                (screens/series.js).
     function cardText(item, context) {
         var numbering = item.Type === 'Episode' ? episodeNumbering(item) : '';
         if (item.Type === 'Episode' && context !== 'series' && item.SeriesName) {
@@ -2473,11 +2480,21 @@
 
     window.JellyQuestCards = {
         createCard: createCard,
-        // Detail explicitly uses this formatter with 'browse' because Home is
-        // the only production Episode entry point today. This shares the
-        // current wording; it does not carry an opening card's context. S4
-        // must pass route context if Series-page cards should open Detail in
-        // the 'series' form.
+        // Detail explicitly uses this formatter with 'browse', and that is
+        // now a real choice rather than the only possibility: since the
+        // Series browse screen landed there are TWO production Episode entry
+        // points into Detail, not one, and an earlier revision of this
+        // comment gave "Home is the only entry point" as the reason.
+        //
+        // The behaviour is unchanged and deliberate. 'series' means "the show
+        // is already named elsewhere on this page", which is true of the
+        // Series screen and NOT true of Detail -- nothing else on the detail
+        // page carries the show's name, so the show has to lead there
+        // whichever screen the episode was opened from. So this formatter
+        // deliberately does not carry the opening card's context, and no
+        // route-context parameter is wanted. test/e2e/series-browse.spec.mjs
+        // pins it: an episode opened from the Series page still shows the
+        // show name as the Detail title and 'S2 E2 - <episode>' beside it.
         textFor: cardText
     };
 })();
@@ -3754,27 +3771,104 @@
 })();
 
 /* ---- src/overlay/screens/series.js ---- */
-// Dedicated Series route seam. S4 replaces this placeholder with the actual
-// season/episode browser; this module deliberately makes no show API request
-// and exposes no playback action because a Series is not itself playable.
+// Series browse screen: a season dropdown plus the selected season's episode
+// list. Replaces the inert S3 seam (PR #31), which rendered a title, a Back
+// button and "Series browsing is not available yet."
+//
+// A Series is not itself playable, so this screen has no playback action of
+// its own: selecting an episode routes to the Detail screen (household
+// decision 5 -- instant play would save one press but lose Start Over, My
+// List and any future track choice). app.js already routes an Episode to
+// Detail and plays it with { ids, serverId, startPositionTicks }.
+//
+// ---- Why a dropdown rather than a row of season posters ----------------
+//
+// Household decision 6: the household's shows average under four seasons
+// (34 series / 129 seasons on the measured server), so a poster row would
+// spend a whole screen band, and an extra press, on a choice that is usually
+// between two or three things.
+//
+// ---- Why every episode ordering here is CLIENT-SIDE --------------------
+//
+// MEASURED against the household's Jellyfin 10.11.11 server:
+// GET /Shows/{id}/Episodes ACCEPTS AND SILENTLY IGNORES `Filters`,
+// `SortBy` and `SortOrder`. Probed on a 73-episode series,
+// Filters=IsResumable&SortBy=DatePlayed returned all 73 records, unfiltered
+// and unsorted, with the played episodes still sitting at positions 38, 56
+// and 73. So a request that asks the server to order or filter episodes
+// LOOKS like it works and is wrong. This screen therefore sends neither
+// option and sorts the response itself (orderEpisodes below).
+//
+// `Limit` IS honoured (TotalRecordCount stays pre-Limit), but this screen
+// does not page: a partial page cannot be ordered correctly when the
+// ordering is ours to do, so a season is fetched whole and the MOUNTING is
+// what gets bounded (see "Why this windows" below).
+//
+// IsMissing:false and IsVirtualUnaired:false are always sent. MEASURED: PAW
+// Patrol carries 129 VIRTUAL episode records on top of its 346 real ones, so
+// a naive fetch returns 475.
 (function () {
     'use strict';
 
-    // callbacks: { onBack() }
+    // ---- Why this windows, and why it does not reuse library.js's ------
+    //
+    // The vendored spatial-navigation polyfill sweeps every candidate on
+    // every arrow press, so per-keypress cost scales with MOUNTED cards, not
+    // fetched items. MEASURED for PR #24 under 20x CPU throttling on desktop
+    // Chromium (an OPTIMISTIC lower bound for a 2019 M63 television, not a
+    // measurement of one): 48 mounted cards = 48.0ms median / 91.3ms worst;
+    // 200 cards = 75-124ms, already past a 100ms budget; 680 = 249-384ms.
+    //
+    // These are library.js's constants, deliberately, so the measured 48-card
+    // figure above describes this screen too.
+    //
+    // library.js's renderWindowedGrid() is NOT reused, and the reason is not
+    // that the numbers differ. It is inseparable from its PAGING -- fetchPage,
+    // appendPage, the id dedup, the exhaustion heuristics, the prefetch
+    // trigger and the "a landed page must re-run the forward window test"
+    // fix -- none of which an episode list can have, because ordering the
+    // response is this screen's job and a partial page cannot be ordered
+    // correctly. It is also not exported; JellyQuestLibraryScreen publishes
+    // render() alone, and pulling the window core out of the screen with the
+    // repo's most delicate documented invariants, for a caller that needs
+    // none of its paging, is a refactor this task did not ask for.
+    //
+    // WHAT THAT COSTS, stated plainly: the window arithmetic below now exists
+    // in two files and has to be kept in step by hand. The INVARIANT comment
+    // in library.js is the authority; the one in mountEpisodes() restates the
+    // same arithmetic for the same constants.
+    //
+    // Season partitioning is what makes the bound generous in practice --
+    // this screen mounts one season, never a whole series -- but it is not
+    // itself a bound. The measured 346/13 aggregate for PAW Patrol says
+    // nothing about how episodes distribute across seasons (the fixture's own
+    // per-season split is INFERRED, not probed), and a single-season show of
+    // several hundred episodes is a shape nobody has ruled out. The window is
+    // the guard for that case.
+    var COLUMNS = 4;
+    var WINDOW_SIZE = 48;
+    var EDGE_ROWS = 2;
+
+    // callbacks: {
+    //   onBack(), onSelectItem(episode),
+    //   initialSeasonId  -- the season to open on, so returning from an
+    //                       episode's Detail page comes back to the season
+    //                       the viewer was actually in,
+    //   onSeasonChange(seasonId) -- reports that back to app.js
+    // }
     function renderSeries(container, item, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-detail-screen jq-series-screen';
+        container.className = 'jq-series-screen';
 
         var heading = document.createElement('h1');
         heading.className = 'jq-detail-title jq-series-title';
         heading.textContent = item && item.Name ? item.Name : 'Series';
         container.appendChild(heading);
 
-        // Keep Back immediately below the title. Besides making the only
-        // action prominent, this places it alongside the persistent rail so
-        // ArrowLeft has a visible rail candidate in the focus geometry.
-        // MEASURED: putting the status first restores the old placeholder's
-        // dead ArrowLeft; this order makes the rail reachable in one press.
+        // Back stays immediately below the title, where the S3 seam put it:
+        // besides making the exit prominent, it places a focusable control
+        // alongside the persistent rail, so ArrowLeft has a visible rail
+        // candidate from the top of the screen.
         var back = document.createElement('button');
         back.className = 'jq-back-button jq-focusable';
         back.textContent = '< Back';
@@ -3782,12 +3876,405 @@
         back.addEventListener('click', callbacks.onBack);
         container.appendChild(back);
 
+        var controls = document.createElement('div');
+        controls.className = 'jq-series-controls';
+        container.appendChild(controls);
+
+        // The televisions have no console (PR #18 made ten silent failures
+        // visible for exactly this reason), so every load, empty and failure
+        // state on this screen is a paragraph on screen, not a log line.
         var status = document.createElement('p');
-        status.className = 'jq-detail-error jq-series-status';
-        status.textContent = 'Series browsing is not available yet.';
+        status.className = 'jq-series-status';
         container.appendChild(status);
 
+        var grid = document.createElement('div');
+        grid.className = 'jq-grid jq-series-episodes';
+        grid.style.gridTemplateColumns = 'repeat(' + COLUMNS + ', 220px)';
+        container.appendChild(grid);
+
+        var seasonButton = null;
+        var currentSeasonId = null;
+        // Guards a late episode response against a newer season selection.
+        var episodeRequest = 0;
+        // Replaced wholesale by each mountEpisodes(); the grid's own focus
+        // listener is registered once, below, and dispatches into whatever
+        // window is current, so changing season cannot leak listeners.
+        var episodeWindow = null;
+        // Assigned by buildSeasonControl(), which closes over the option
+        // nodes; null until the season list has actually arrived.
+        var markCurrentSeason = null;
+
+        setStatus('Loading seasons…', false);
+
+        // Focus is placed for this render BEFORE anything is awaited, so the
+        // remote is live immediately and the anchor below means something.
         window.JellyQuestFocus.focusFirst(container);
+        // FOCUS ANCHOR. Captured AFTER this render has finished placing focus
+        // and STRICTLY BEFORE the first await -- the shape six shipped
+        // focus-steal bugs (PRs #17/#24/#26/#27/#28) all had wrong. Capturing
+        // it any earlier is provably wrong: that was tried in PR #27 and
+        // regressed the retry path. focusFirst() compares it against
+        // document.activeElement when the response lands, so a cursor the
+        // viewer moved while the request was in flight is newer intent and
+        // wins.
+        var focusAtRequest = document.activeElement;
+
+        // Node identity, not a render counter: JellyQuestShell.getContent()
+        // hands back the SAME <main> for every screen, so only a node this
+        // render created can tell "still mine" from "a later render replaced
+        // me". Same idiom as detail.js.
+        function isCurrentRender() {
+            return heading.parentNode === container;
+        }
+
+        function setStatus(text, isError) {
+            status.textContent = text;
+            status.hidden = false;
+            if (isError) status.className = 'jq-series-status jq-series-status-error';
+            else status.className = 'jq-series-status';
+        }
+
+        function clearStatus() {
+            status.hidden = true;
+            status.textContent = '';
+        }
+
+        var apiClient = window.ApiClient;
+        if (!apiClient || typeof apiClient.getSeasons !== 'function'
+            || typeof apiClient.getEpisodes !== 'function') {
+            // Nothing has been awaited, so focus is still where this render
+            // put it and there is no anchor decision to make.
+            setStatus('Shows are unavailable right now. Try again.', true);
+            console.error('[JellyQuest] ApiClient show endpoints are unavailable.');
+            return;
+        }
+        var userId = typeof apiClient.getCurrentUserId === 'function' ? apiClient.getCurrentUserId() : null;
+
+        // Promise.resolve().then(call) rather than
+        // Promise.resolve(call()): a SYNCHRONOUS throw out of the client --
+        // an unknown series id is one, in dev/fixtures/api-client-stub.js and
+        // plausibly in the real client's argument handling -- would otherwise
+        // escape this chain entirely, leaving the screen on 'Loading seasons…'
+        // forever with the failure only in a console the television does not
+        // have. Inside the callback it becomes a rejection and reaches the
+        // visible catch below. Same shape for the episode request.
+        Promise.resolve().then(function () {
+            return apiClient.getSeasons(item.Id, { UserId: userId });
+        }).then(function (result) {
+            if (!isCurrentRender()) return; // navigated away, or re-entered
+            var seasons = (result && result.Items) || [];
+            if (!seasons.length) {
+                // A real library state, not an edge case to skip: MEASURED,
+                // the household's NHL series has zero seasons and zero
+                // episodes. No episode request is made for it.
+                setStatus('No episodes are available for this show yet.', false);
+                window.JellyQuestFocus.focusFirst(container, focusAtRequest);
+                return;
+            }
+            buildSeasonControl(seasons);
+            selectSeason(initialSeason(seasons), focusAtRequest);
+        }).catch(function (error) {
+            if (!isCurrentRender()) return;
+            setStatus('Couldn’t load this show’s seasons. Try again.', true);
+            window.JellyQuestFocus.focusFirst(container, focusAtRequest);
+            console.error('[JellyQuest] Series seasons failed:', error);
+        });
+
+        function initialSeason(seasons) {
+            var index;
+            for (index = 0; index < seasons.length; index++) {
+                if (seasons[index].Id === callbacks.initialSeasonId) return seasons[index];
+            }
+            return seasons[0];
+        }
+
+        function seasonLabel(season) {
+            if (season.Name) return season.Name;
+            if (typeof season.IndexNumber === 'number') return 'Season ' + season.IndexNumber;
+            return 'Season';
+        }
+
+        function buildSeasonControl(seasons) {
+            seasonButton = document.createElement('button');
+            seasonButton.className = 'jq-series-season-button jq-focusable';
+            seasonButton.setAttribute('aria-haspopup', 'true');
+            controls.appendChild(seasonButton);
+            // The season control is where the viewer wants to be once the
+            // show has loaded, and it is what the anchored focusFirst() calls
+            // below aim at. Move the marker off Back rather than adding a
+            // second one: focusInto() takes the FIRST [data-jq-autofocus] in
+            // the container, and two would make the answer positional.
+            back.removeAttribute('data-jq-autofocus');
+            seasonButton.setAttribute('data-jq-autofocus', '');
+
+            var backdrop = document.createElement('div');
+            backdrop.className = 'jq-modal-backdrop jq-series-season-backdrop';
+            backdrop.hidden = true;
+
+            var menu = document.createElement('div');
+            menu.className = 'jq-modal jq-series-season-menu';
+            menu.setAttribute('role', 'dialog');
+            menu.setAttribute('aria-label', 'Choose a season');
+            backdrop.appendChild(menu);
+
+            var menuHeading = document.createElement('h2');
+            menuHeading.textContent = 'Seasons';
+            menu.appendChild(menuHeading);
+
+            var options = [];
+            seasons.forEach(function (season) {
+                var option = document.createElement('button');
+                option.className = 'jq-modal-option jq-focusable jq-series-season-option';
+                option.textContent = seasonLabel(season);
+                option.addEventListener('click', function () {
+                    closeMenu();
+                    // ANCHOR, again captured after focus has been placed
+                    // (closeModal() has just restored it to the season
+                    // button) and before the episode request goes out.
+                    selectSeason(season, document.activeElement);
+                });
+                menu.appendChild(option);
+                options.push(option);
+            });
+
+            container.appendChild(backdrop);
+
+            seasonButton.addEventListener('click', function () {
+                backdrop.hidden = false;
+                // openModal() marks the dialog contained, so arrow keys
+                // cannot walk out of it, and registers closeMenu() as the
+                // hardware Back handler -- Back closes the dropdown before it
+                // leaves the screen, per DETAIL_ACTIONS.md's "Left or Back
+                // returns one level before closing".
+                window.JellyQuestFocus.openModal(menu, closeMenu);
+                // openModal() focuses the menu's first option. Start on the
+                // season the viewer is actually in instead, so Up/Down move
+                // from where they are. Held by node identity rather than an
+                // attribute selector on a server id.
+                var index;
+                for (index = 0; index < seasons.length; index++) {
+                    if (seasons[index].Id === currentSeasonId) {
+                        options[index].focus();
+                        return;
+                    }
+                }
+            });
+
+            function closeMenu() {
+                backdrop.hidden = true;
+                window.JellyQuestFocus.closeModal(menu, seasonButton);
+            }
+
+            markCurrentSeason = function () {
+                var index;
+                for (index = 0; index < seasons.length; index++) {
+                    if (seasons[index].Id === currentSeasonId) options[index].setAttribute('aria-current', 'true');
+                    else options[index].removeAttribute('aria-current');
+                }
+            };
+        }
+
+        function selectSeason(season, focusAnchor) {
+            currentSeasonId = season.Id;
+            seasonButton.textContent = seasonLabel(season) + ' ▾';
+            if (markCurrentSeason) markCurrentSeason();
+            if (callbacks.onSeasonChange) callbacks.onSeasonChange(season.Id);
+
+            // Unmount the previous season's cards NOW, not when the response
+            // lands. The cursor is on the season button at this moment
+            // (closeModal restored it there), but it would be free to walk
+            // down into the old cards during the request, and removing the
+            // focused node is how a television ends up with no cursor.
+            unmountEpisodes();
+            setStatus('Loading episodes…', false);
+
+            var token = ++episodeRequest;
+            // No SortBy/SortOrder/Filters: MEASURED, this endpoint accepts
+            // and ignores all three (see the header). The two false switches
+            // are what keep virtual placeholder records out.
+            Promise.resolve().then(function () {
+                return apiClient.getEpisodes(item.Id, {
+                    UserId: userId,
+                    SeasonId: season.Id,
+                    IsMissing: false,
+                    IsVirtualUnaired: false
+                });
+            }).then(function (result) {
+                if (!isCurrentRender() || token !== episodeRequest) return;
+                var episodes = orderEpisodes((result && result.Items) || []);
+                if (!episodes.length) setStatus('No episodes in this season yet.', false);
+                else {
+                    clearStatus();
+                    mountEpisodes(episodes);
+                }
+                window.JellyQuestFocus.focusFirst(container, focusAnchor);
+            }).catch(function (error) {
+                if (!isCurrentRender() || token !== episodeRequest) return;
+                // Re-selecting the same season re-runs this request, so the
+                // dropdown is the retry path and it stays reachable.
+                setStatus('Couldn’t load this season’s episodes. Try again.', true);
+                window.JellyQuestFocus.focusFirst(container, focusAnchor);
+                console.error('[JellyQuest] Series episodes failed:', error);
+            });
+        }
+
+        function unmountEpisodes() {
+            episodeWindow = null;
+            grid.innerHTML = '';
+            grid.style.paddingTop = '0px';
+            grid.style.paddingBottom = '0px';
+        }
+
+        function mountEpisodes(items) {
+            var windowStart = 0;
+            var windowEnd = Math.min(items.length, WINDOW_SIZE);
+            var rowPitch = 0;
+            // Indexed by position in `items`, which never renumbers, so an
+            // artwork retry budget stays with the episode it was opened for
+            // when windowing recreates its card (see cards.js).
+            var retryBudgets = [];
+            var index;
+
+            function createCard(cardIndex) {
+                var episode = items[cardIndex];
+                if (!retryBudgets[cardIndex]) retryBudgets[cardIndex] = { failures: 0 };
+                // context:'series' is household decision 3 -- inside the
+                // show's own page the show name is already at the top, so the
+                // EPISODE's name leads and 'S3 E12' drops to the meta line.
+                // cards.js has implemented this branch since PR #30 with no
+                // production caller; this is that caller.
+                var card = window.JellyQuestCards.createCard(episode, {
+                    context: 'series',
+                    artworkRetryBudget: retryBudgets[cardIndex],
+                    onSelect: function () { callbacks.onSelectItem(episode); }
+                });
+                card._jqSeriesIndex = cardIndex;
+                return card;
+            }
+
+            function measureRowPitch() {
+                var cards = grid.querySelectorAll('.jq-media-card');
+                if (cards.length > COLUMNS) {
+                    return cards[COLUMNS].getBoundingClientRect().top
+                        - cards[0].getBoundingClientRect().top;
+                }
+                if (!cards.length) return 0;
+                var style = window.getComputedStyle(grid);
+                var rowGap = parseFloat(style.gridRowGap || style.gridGap) || 0;
+                return cards[0].getBoundingClientRect().height + rowGap;
+            }
+
+            // Unmounted rows are carried as padding, so the scroll range --
+            // and therefore every reveal focus.js computes -- matches the
+            // whole season rather than the mounted window.
+            function updatePadding() {
+                var totalRows = Math.ceil(items.length / COLUMNS);
+                var firstRow = windowStart / COLUMNS;
+                var lastRow = Math.ceil(windowEnd / COLUMNS);
+                grid.style.paddingTop = firstRow * rowPitch + 'px';
+                grid.style.paddingBottom = (totalRows - lastRow) * rowPitch + 'px';
+            }
+
+            function moveWindow(nextStart) {
+                var maximumStart = Math.ceil(Math.max(0, items.length - WINDOW_SIZE) / COLUMNS) * COLUMNS;
+                var nextEnd;
+                var card;
+                var cardIndex;
+                nextStart = Math.max(0, Math.min(maximumStart, nextStart));
+                nextEnd = Math.min(items.length, nextStart + WINDOW_SIZE);
+                if (nextStart === windowStart && nextEnd === windowEnd) return;
+
+                card = grid.firstElementChild;
+                while (card) {
+                    var next = card.nextElementSibling;
+                    if (card._jqSeriesIndex < nextStart || card._jqSeriesIndex >= nextEnd) {
+                        grid.removeChild(card);
+                    }
+                    card = next;
+                }
+                for (cardIndex = windowStart - 1; cardIndex >= nextStart; cardIndex--) {
+                    grid.insertBefore(createCard(cardIndex), grid.firstElementChild);
+                }
+                for (cardIndex = Math.max(windowEnd, nextStart); cardIndex < nextEnd; cardIndex++) {
+                    grid.appendChild(createCard(cardIndex));
+                }
+                windowStart = nextStart;
+                windowEnd = nextEnd;
+                updatePadding();
+            }
+
+            for (index = windowStart; index < windowEnd; index++) {
+                grid.appendChild(createCard(index));
+            }
+            rowPitch = measureRowPitch();
+            updatePadding();
+
+            // INVARIANT: moveWindow() must keep the focused index inside
+            // [nextStart, nextEnd), so the focused node stays attached across
+            // the synchronous update. Re-check this if WINDOW_SIZE, COLUMNS,
+            // EDGE_ROWS or the +/- COLUMNS step changes -- and re-check
+            // library.js's copy of the same arithmetic with it.
+            // With 48/4/2: a down move requires index >= windowEnd - 8 =
+            // windowStart + 40 while nextStart is only windowStart + 4; an up
+            // move requires index < windowStart + 8 while nextEnd is
+            // (windowStart - 4) + 48 = windowStart + 44. Neither removal
+            // range can contain the focused index. Guaranteed by that
+            // arithmetic, not by a runtime assertion.
+            //
+            // Unlike library.js there is no paging caller: a season arrives
+            // whole, so `items` never grows and this is the only mutator.
+            episodeWindow = {
+                onFocus: function (focused) {
+                    var focusedIndex = focused._jqSeriesIndex;
+                    if (typeof focusedIndex !== 'number') return;
+                    if (focusedIndex >= windowEnd - EDGE_ROWS * COLUMNS && windowEnd < items.length) {
+                        moveWindow(windowStart + COLUMNS);
+                        return;
+                    }
+                    if (focusedIndex < windowStart + EDGE_ROWS * COLUMNS && windowStart > 0) {
+                        moveWindow(windowStart - COLUMNS);
+                    }
+                }
+            };
+        }
+
+        // Registered once, on a grid node that outlives every season, so a
+        // season change replaces the window without touching listeners.
+        grid.addEventListener('focus', function (event) {
+            if (episodeWindow) episodeWindow.onFocus(event.target);
+        }, true);
+    }
+
+    // Season first, then episode number, with anything the server did not
+    // number kept last in the order it arrived. MEASURED: the server ignores
+    // SortBy on this endpoint, so this is the only ordering there is.
+    //
+    // Decorated with the arrival index because Array#sort is NOT specified
+    // stable in ES5 and V8's own sort only became stable in V8 7.0 /
+    // Chromium M70 -- above BOTH target sets (M63 and M69). Comparing the
+    // index as the final tiebreak makes the result stable regardless.
+    function orderEpisodes(episodes) {
+        var decorated = episodes.map(function (episode, index) {
+            return { episode: episode, index: index };
+        });
+        decorated.sort(function (a, b) {
+            return compareIndexNumber(a.episode.ParentIndexNumber, b.episode.ParentIndexNumber)
+                || compareIndexNumber(a.episode.IndexNumber, b.episode.IndexNumber)
+                || (a.index - b.index);
+        });
+        return decorated.map(function (entry) { return entry.episode; });
+    }
+
+    // Explicit branches rather than a sentinel: a numeric sentinel large
+    // enough to sort last subtracts from itself to NaN, which sort() reads as
+    // "equal" only by accident.
+    function compareIndexNumber(a, b) {
+        var aNumbered = typeof a === 'number';
+        var bNumbered = typeof b === 'number';
+        if (aNumbered && bNumbered) return a - b;
+        if (aNumbered) return -1;
+        if (bNumbered) return 1;
+        return 0;
     }
 
     window.JellyQuestSeriesScreen = {
@@ -4355,11 +4842,28 @@
         showDetail(item, returnTo);
     }
 
-    function showSeries(item, returnTo) {
+    // `seasonId` is what the viewer was last looking at inside this show.
+    // Coming back from an episode's Detail page has to land on that season
+    // again -- returning to season 1 after browsing season 5 is a worse exit
+    // than the S3 seam's, which had no state to lose. The screen reports each
+    // change through onSeasonChange, and the local `state` object is what
+    // carries it into the return closure below.
+    function showSeries(item, returnTo, seasonId) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
+        var state = { seasonId: seasonId || null };
         window.JellyQuestSeriesScreen.render(window.JellyQuestShell.getContent(), item, {
-            onBack: returnTo
+            onBack: returnTo,
+            initialSeasonId: state.seasonId,
+            onSeasonChange: function (changedTo) { state.seasonId = changedTo; },
+            // An episode opens its Detail page rather than playing outright
+            // (household decision 5): instant play would save one press and
+            // lose Start Over, My List and any future track choice. Episode
+            // routing and playback already work -- showItem() sends a
+            // non-Series item to showDetail().
+            onSelectItem: function (episode) {
+                showItem(episode, function () { showSeries(item, returnTo, state.seasonId); });
+            }
         });
     }
 

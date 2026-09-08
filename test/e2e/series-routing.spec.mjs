@@ -1,5 +1,6 @@
-// Series/Episode routing seam. Series browsing itself belongs to S4; these
-// tests pin only the route boundary and the playable Episode detail behavior.
+// Series/Episode routing. These tests pin the route boundary and the playable
+// Episode detail behavior; the Series browse screen S4 put behind that
+// boundary has its own suite in series-browse.spec.mjs.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -29,12 +30,6 @@ async function openHomeItem(page, itemId) {
     await page.locator(`[data-item-id="${itemId}"]`).click();
 }
 
-async function reopenSeries(page) {
-    await page.locator('.jq-nav-home').click();
-    await page.waitForSelector('[data-item-id="series-1"]');
-    await openHomeItem(page, 'series-1');
-    await page.waitForSelector('.jq-series-screen');
-}
 
 test('Episode Detail reuses browse-card context and autofocuses Resume', async () => withPage(async (page) => {
     await openHomeItem(page, 'episode-516');
@@ -108,39 +103,19 @@ test('Episode Resume and Play use ids, item serverId, and the requested position
     }
 });
 
-test('Series uses its dedicated inert seam without show queries or playback controls', async () => withPage(async (page) => {
-    await page.evaluate(() => {
-        window.__showQueries = 0;
-        window.ApiClient.getEpisodes = function () { window.__showQueries += 1; throw new Error('out-of-scope episode query'); };
-        window.ApiClient.getSeasons = function () { window.__showQueries += 1; throw new Error('out-of-scope season query'); };
-    });
+test('Series routes to its own screen and offers no playback action of its own', async () => withPage(async (page) => {
     await openHomeItem(page, 'series-1');
-    await page.waitForSelector('.jq-series-screen');
+    await page.waitForSelector('.jq-series-season-button');
 
     assert.equal(await page.locator('.jq-series-title').textContent(), 'Northern Stories 1');
-    assert.equal(await page.locator('.jq-series-status').textContent(), 'Series browsing is not available yet.');
+    // NON-REGRESSION GUARD, unchanged in substance from the S3 seam's version
+    // of this test: a Series is a folder and is not itself playable, so the
+    // screen behind this route must never grow a Play/Resume action or reach
+    // playback. Only the "no show queries" clause is gone -- S4's browser
+    // exists precisely to make those queries.
     assert.equal(await page.locator('.jq-detail-action').count(), 0);
-    assert.equal(await page.evaluate(() => window.__showQueries), 0);
-    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-back-button')), true);
-    await assertPainted(page.locator('.jq-series-status'));
-    await assertPainted(page.locator(':focus'));
-}));
-
-test('Series seam exits by Enter, hardware Back, and ArrowLeft to the rail', async () => withPage(async (page) => {
-    await openHomeItem(page, 'series-1');
-    await page.waitForSelector('.jq-series-screen');
-
-    await page.keyboard.press('Enter');
-    await page.waitForSelector('.jq-home-row-heading');
-    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-media-card')), true);
-
-    await reopenSeries(page);
-    await page.keyboard.press('Escape');
-    await page.waitForSelector('.jq-home-row-heading');
-    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-media-card')), true);
-
-    await reopenSeries(page);
-    await page.keyboard.press('ArrowLeft');
-    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-rail-item')), true);
+    assert.equal(await page.evaluate(() => window.playbackManager.__calls.length), 0);
+    assert.equal(await page.evaluate(
+        () => document.activeElement.classList.contains('jq-series-season-button')), true);
     await assertPainted(page.locator(':focus'));
 }));
