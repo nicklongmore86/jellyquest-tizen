@@ -1,4 +1,4 @@
-// Top-level nav shell -- the persistent rail (Profile/Home/Search/Requests)
+// Top-level nav shell -- the persistent rail (Profile/Home/Shows/Search/Requests)
 // stays mounted across every screen; app.js swaps what's in the content
 // area beneath/beside it (Home, Search, Library, Detail). This matches
 // DETAIL_ACTIONS.md's focus graph, which has the rail reachable by Up
@@ -12,7 +12,7 @@
 
     var contentEl = null;
 
-    // callbacks: { onSwitchProfile(), onHome(), onSearch(), onRequests() }
+    // callbacks: { onSwitchProfile(), onHome(), onShows(), onSearch(), onRequests() }
     function renderShell(container, callbacks) {
         container.innerHTML = '';
         container.className = 'jq-shell';
@@ -37,6 +37,12 @@
         homeButton.textContent = 'Home';
         homeButton.addEventListener('click', callbacks.onHome);
         rail.appendChild(homeButton);
+
+        var showsButton = document.createElement('button');
+        showsButton.className = 'jq-rail-item jq-focusable jq-nav-shows';
+        showsButton.textContent = 'Shows';
+        showsButton.addEventListener('click', callbacks.onShows);
+        rail.appendChild(showsButton);
 
         var searchButton = document.createElement('button');
         searchButton.className = 'jq-rail-item jq-focusable jq-nav-search';

@@ -57,6 +57,7 @@ Queue controls, media information, downloads, deletion, and metadata administrat
 
 The movie, show, and sports detail previews use an explicit focus graph:
 
+- The persistent rail is Profile, Home, Shows, Search, Requests; Up and Down walk adjacent entries in that order.
 - Profile moves down into the left rail. Home moves down to the primary playback action, and Requests moves down to More.
 - Left and Right remain within the action row. Left from the primary action enters the rail; Right stops at More.
 - Up from the first half of the action row reaches Home. Up from the second half reaches Requests.

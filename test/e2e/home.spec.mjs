@@ -91,6 +91,7 @@ test('a delayed Home render preserves a newer rendered rail selection', async ()
 
         await page.keyboard.press('ArrowDown');
         await page.keyboard.press('ArrowDown');
+        await page.keyboard.press('ArrowDown');
         assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-nav-search')), true,
             'the delayed-response precondition must leave a real selection on Search');
         await assertPainted(page.locator(':focus'));

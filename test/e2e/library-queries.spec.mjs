@@ -224,6 +224,79 @@ test('Home and Library use independent media queries and Library reaches beyond 
     ]);
 }));
 
+test('Shows rail entry browses only Series in title order and opens the existing Series browser', async () => withPage(async page => {
+    await signIn(page);
+    await page.evaluate(() => {
+        const original = window.ApiClient.getItems;
+        window.__showsQueries = [];
+        window.ApiClient.getItems = function (user, options) {
+            window.__showsQueries.push(options);
+            return original(user, options);
+        };
+    });
+
+    assert.equal(await page.locator('.jq-nav-shows').count(), 1,
+        'Shows must be a first-class entry in the persistent rail');
+    await page.locator('.jq-nav-shows').click();
+    await page.waitForSelector('.jq-library-grid .jq-media-card');
+
+    assert.equal(await page.locator('.jq-library-heading').textContent(), 'Shows');
+    assert.deepEqual(await page.evaluate(() => window.__showsQueries), [
+        { Recursive: true, IncludeItemTypes: 'Series', SortBy: 'SortName', SortOrder: 'Ascending', StartIndex: 0, Limit: 96 }
+    ]);
+    assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), 44,
+        'the fixture collection fits under the shared 48-card mounted window');
+    assert.deepEqual(await page.locator('.jq-library-grid .jq-media-card').evaluateAll((cards) =>
+        cards.map((card) => card.querySelector('.jq-media-card-title').textContent)),
+    [
+        'NHL',
+        ...Array.from({ length: 42 }, (_, index) => 'Northern Stories ' + (index + 1))
+            .sort((left, right) => left.localeCompare(right)),
+        'PAW Patrol',
+    ]);
+    assert.equal(await page.locator('.jq-library-grid .jq-media-card').evaluateAll((cards) =>
+        cards.every((card) => card.getBoundingClientRect().height === 410)), true,
+    'Series must retain poster geometry rather than episode-still geometry');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), 'series-nhl');
+    await assertPainted(page.locator(':focus'));
+
+    const traversal = await page.evaluate(() => {
+        const cards = Array.from(document.querySelectorAll('.jq-library-grid .jq-media-card'));
+        const first = cards[0].getBoundingClientRect();
+        const fifth = cards[4].getBoundingClientRect();
+        const screen = document.querySelector('.jq-library-screen');
+        return {
+            ids: cards.map((card) => card.dataset.itemId),
+            pitch: Math.round(fifth.top - first.top),
+            range: screen.scrollHeight - screen.clientHeight,
+        };
+    });
+    assert.ok(traversal.range > traversal.pitch * 5,
+        `Shows must be deep enough to exercise reveal-on-Up: ${traversal.range}px range, ${traversal.pitch}px pitch`);
+    const rows = Math.ceil(traversal.ids.length / 4);
+    for (let row = 1; row < rows; row++) {
+        await page.keyboard.press('ArrowDown');
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), traversal.ids[row * 4]);
+        await assertPainted(page.locator(':focus'));
+    }
+    for (let row = rows - 2; row >= 0; row--) {
+        await page.keyboard.press('ArrowUp');
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), traversal.ids[row * 4]);
+        await assertPainted(page.locator(':focus'));
+    }
+    await page.keyboard.press('ArrowUp');
+    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-back-button')), true);
+    await assertPainted(page.locator(':focus'));
+
+    await page.locator('[data-item-id="series-1"]').click();
+    assert.equal(await page.locator('.jq-series-screen').count(), 1,
+        'selecting a show must synchronously cross the existing Series route boundary');
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+    assert.equal(await page.locator('.jq-series-title').textContent(), 'Northern Stories 1');
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Season 1 ▾');
+    await assertPainted(page.locator(':focus'));
+}));
+
 test('Search finds Series and Movies but excludes Episodes', async () => withPage(async page => {
     await signIn(page);
     await page.locator('.jq-nav-search').click();

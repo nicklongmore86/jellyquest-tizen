@@ -605,7 +605,7 @@
             });
             if (options.Recursive !== undefined && typeof options.Recursive !== 'boolean') throw new Error('Unmodeled Recursive');
             if (options.Filters !== undefined && options.Filters !== 'IsResumable') throw new Error('Unmodeled Filters');
-            if (options.SortBy !== undefined && options.SortBy !== 'DateCreated' && options.SortBy !== 'DatePlayed') throw new Error('Unmodeled SortBy');
+            if (options.SortBy !== undefined && options.SortBy !== 'DateCreated' && options.SortBy !== 'DatePlayed' && options.SortBy !== 'SortName') throw new Error('Unmodeled SortBy');
             if (options.SortOrder !== undefined && options.SortOrder !== 'Ascending' && options.SortOrder !== 'Descending') throw new Error('Unmodeled SortOrder');
             if (options.SortOrder && !options.SortBy) throw new Error('SortOrder requires SortBy');
             if (options.Limit !== undefined && (typeof options.Limit !== 'number' || options.Limit < 0 || options.Limit % 1 !== 0)) throw new Error('Unmodeled Limit');
@@ -645,9 +645,11 @@
             var sorted = items.slice();
             if (options.SortBy) sorted.sort(function (a, b) {
                 // DatePlayed is per-user history, not the library's creation date.
-                var aDate = options.SortBy === 'DatePlayed' ? a.UserData.LastPlayedDate : a.DateCreated;
-                var bDate = options.SortBy === 'DatePlayed' ? b.UserData.LastPlayedDate : b.DateCreated;
-                var order = (aDate || '').localeCompare(bDate || '') || a.Id.localeCompare(b.Id);
+                var aValue = options.SortBy === 'DatePlayed' ? a.UserData.LastPlayedDate
+                    : options.SortBy === 'SortName' ? (a.SortName || a.Name) : a.DateCreated;
+                var bValue = options.SortBy === 'DatePlayed' ? b.UserData.LastPlayedDate
+                    : options.SortBy === 'SortName' ? (b.SortName || b.Name) : b.DateCreated;
+                var order = (aValue || '').localeCompare(bValue || '') || a.Id.localeCompare(b.Id);
                 return options.SortOrder === 'Descending' ? -order : order;
             });
             var limit = options && options.Limit;
