@@ -1,8 +1,9 @@
-// Library screen: a full grid for one category (reached via a Home
-// row's "See All"). Uses .jq-grid -- safe here because the column count
-// matches how many cards actually fill a row throughout (only the last,
-// naturally partial row is short), unlike the profile picker's ragged
-// grid template (see docs/rebuild-plan.md's Phase 2 caveat).
+// Library screen: a full grid for one category (reached via a Home row's
+// "See All" or the persistent Shows entry). Uses .jq-grid -- safe here
+// because the column count matches how many cards actually fill a row
+// throughout (only the last, naturally partial row is short), unlike the
+// profile picker's ragged grid template (see docs/rebuild-plan.md's Phase 2
+// caveat).
 (function () {
     'use strict';
 
@@ -168,8 +169,8 @@
         var userId = window.ApiClient.getCurrentUserId();
         function fetchPage(startIndex) {
             return window.ApiClient.getItems(userId, {
-                Recursive: true, IncludeItemTypes: 'Movie,Series',
-                SortBy: 'DateCreated', SortOrder: 'Descending',
+                Recursive: true, IncludeItemTypes: row.includeItemTypes || 'Movie,Series',
+                SortBy: row.sortBy || 'DateCreated', SortOrder: row.sortOrder || 'Descending',
                 StartIndex: startIndex, Limit: PAGE_SIZE
             });
         }

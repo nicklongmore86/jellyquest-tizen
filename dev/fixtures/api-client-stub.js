@@ -103,11 +103,17 @@
     // Generated dates keep movie-10 newest, with a Series beside it.
     var i;
     for (i = 1; i <= 42; i++) {
-        SERIES.push({ Id: 'series-' + i, Name: 'Northern Stories ' + i, Type: 'Series',
+        var fixtureSeries = { Id: 'series-' + i,
+            Name: i === 42 ? 'The Northern Stories 42' : 'Northern Stories ' + i, Type: 'Series',
             IsFolder: true, ParentId: 'shows', ServerId: SERVER_ID,
             ImageTags: { Primary: 'preview-v1' },
             DateCreated: i === 1 ? '2026-08-09T12:00:00Z' : '2025-01-01T00:00:00Z',
-            Overview: 'A fixture series with enough metadata for a full-item fetch.', LocalTrailerCount: 0 });
+            Overview: 'A fixture series with enough metadata for a full-item fetch.', LocalTrailerCount: 0 };
+        // A real display-name/sort-name divergence, so SortBy=SortName cannot
+        // accidentally pass by sorting Name instead. It remains a Northern
+        // title so search-result cardinality is unchanged.
+        if (i === 42) fixtureSeries.SortName = 'Northern Stories 42, The';
+        SERIES.push(fixtureSeries);
     }
     // MEASURED shapes: PAW Patrol is the deepest real series (346 episodes
     // over 13 seasons, plus 129 virtual placeholders); NHL has zero episodes.
@@ -605,7 +611,7 @@
             });
             if (options.Recursive !== undefined && typeof options.Recursive !== 'boolean') throw new Error('Unmodeled Recursive');
             if (options.Filters !== undefined && options.Filters !== 'IsResumable') throw new Error('Unmodeled Filters');
-            if (options.SortBy !== undefined && options.SortBy !== 'DateCreated' && options.SortBy !== 'DatePlayed') throw new Error('Unmodeled SortBy');
+            if (options.SortBy !== undefined && options.SortBy !== 'DateCreated' && options.SortBy !== 'DatePlayed' && options.SortBy !== 'SortName') throw new Error('Unmodeled SortBy');
             if (options.SortOrder !== undefined && options.SortOrder !== 'Ascending' && options.SortOrder !== 'Descending') throw new Error('Unmodeled SortOrder');
             if (options.SortOrder && !options.SortBy) throw new Error('SortOrder requires SortBy');
             if (options.Limit !== undefined && (typeof options.Limit !== 'number' || options.Limit < 0 || options.Limit % 1 !== 0)) throw new Error('Unmodeled Limit');
@@ -645,9 +651,11 @@
             var sorted = items.slice();
             if (options.SortBy) sorted.sort(function (a, b) {
                 // DatePlayed is per-user history, not the library's creation date.
-                var aDate = options.SortBy === 'DatePlayed' ? a.UserData.LastPlayedDate : a.DateCreated;
-                var bDate = options.SortBy === 'DatePlayed' ? b.UserData.LastPlayedDate : b.DateCreated;
-                var order = (aDate || '').localeCompare(bDate || '') || a.Id.localeCompare(b.Id);
+                var aValue = options.SortBy === 'DatePlayed' ? a.UserData.LastPlayedDate
+                    : options.SortBy === 'SortName' ? (a.SortName || a.Name) : a.DateCreated;
+                var bValue = options.SortBy === 'DatePlayed' ? b.UserData.LastPlayedDate
+                    : options.SortBy === 'SortName' ? (b.SortName || b.Name) : b.DateCreated;
+                var order = (aValue || '').localeCompare(bValue || '') || a.Id.localeCompare(b.Id);
                 return options.SortOrder === 'Descending' ? -order : order;
             });
             var limit = options && options.Limit;

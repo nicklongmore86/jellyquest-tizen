@@ -55,8 +55,14 @@ Queue controls, media information, downloads, deletion, and metadata administrat
 
 ## Simulator detail navigation
 
-The movie, show, and sports detail previews use an explicit focus graph:
+This section is a SPECIFICATION of the intended focus graph, not a description
+of measured behaviour. Two of its bullets are known to be false against the
+shipped overlay -- see "Measured deviations" below. Do not cite a bullet here as
+evidence of how the app behaves without probing it first.
 
+- The persistent rail is Profile, Home, Shows, Search, Requests; Up and Down walk
+  adjacent entries in that order. (MEASURED against `shell.js` at the fifth-item
+  change; the rest of this list is unverified spec.)
 - Profile moves down into the left rail. Home moves down to the primary playback action, and Requests moves down to More.
 - Left and Right remain within the action row. Left from the primary action enters the rail; Right stops at More.
 - Up from the first half of the action row reaches Home. Up from the second half reaches Requests.
@@ -64,3 +70,21 @@ The movie, show, and sports detail previews use an explicit focus graph:
 - Lower cards move horizontally within their visual row. Up returns to the aligned action, Down advances only when another card row exists, and Down stops on the final row.
 - Every vertical transition remembers its origin: returning in the opposite direction restores the exact previous control.
 - Playback-option dialogs contain focus. Up and Down move one option, Right stays put, and Left or Back returns one level before closing and restoring More.
+
+### Measured deviations
+
+Recorded so the spec above is not mistaken for a description of current
+behaviour. Both were probed on a real page, on master and on the branch that
+added the Shows rail entry:
+
+- **"Home moves down to the primary playback action" is false.** On the detail
+  screen, Down from Home reaches the NEXT RAIL ENTRY -- Search before the Shows
+  entry existed, Shows after it. That is the correct nearest-neighbour result for
+  the rail as built; the bullet describes an intent the overlay has never
+  implemented. Nothing asserts it either way.
+- **"Every vertical transition remembers its origin" is false.** Up from Resume
+  reaches Home; Down from Home then reaches the next rail entry, not Resume.
+  Pre-existing, unrelated to the Shows entry.
+
+Neither is scheduled work. They are written down because an accurate sentence
+sitting beside a stale one makes both read as verified.

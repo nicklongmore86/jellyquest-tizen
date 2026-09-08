@@ -3083,11 +3083,12 @@
 })();
 
 /* ---- src/overlay/screens/library.js ---- */
-// Library screen: a full grid for one category (reached via a Home
-// row's "See All"). Uses .jq-grid -- safe here because the column count
-// matches how many cards actually fill a row throughout (only the last,
-// naturally partial row is short), unlike the profile picker's ragged
-// grid template (see docs/rebuild-plan.md's Phase 2 caveat).
+// Library screen: a full grid for one category (reached via a Home row's
+// "See All" or the persistent Shows entry). Uses .jq-grid -- safe here
+// because the column count matches how many cards actually fill a row
+// throughout (only the last, naturally partial row is short), unlike the
+// profile picker's ragged grid template (see docs/rebuild-plan.md's Phase 2
+// caveat).
 (function () {
     'use strict';
 
@@ -3253,8 +3254,8 @@
         var userId = window.ApiClient.getCurrentUserId();
         function fetchPage(startIndex) {
             return window.ApiClient.getItems(userId, {
-                Recursive: true, IncludeItemTypes: 'Movie,Series',
-                SortBy: 'DateCreated', SortOrder: 'Descending',
+                Recursive: true, IncludeItemTypes: row.includeItemTypes || 'Movie,Series',
+                SortBy: row.sortBy || 'DateCreated', SortOrder: row.sortOrder || 'Descending',
                 StartIndex: startIndex, Limit: PAGE_SIZE
             });
         }
@@ -4944,7 +4945,7 @@
 })();
 
 /* ---- src/overlay/shell.js ---- */
-// Top-level nav shell -- the persistent rail (Profile/Home/Search/Requests)
+// Top-level nav shell -- the persistent rail (Profile/Home/Shows/Search/Requests)
 // stays mounted across every screen; app.js swaps what's in the content
 // area beneath/beside it (Home, Search, Library, Detail). This matches
 // DETAIL_ACTIONS.md's focus graph, which has the rail reachable by Up
@@ -4958,7 +4959,7 @@
 
     var contentEl = null;
 
-    // callbacks: { onSwitchProfile(), onHome(), onSearch(), onRequests() }
+    // callbacks: { onSwitchProfile(), onHome(), onShows(), onSearch(), onRequests() }
     function renderShell(container, callbacks) {
         container.innerHTML = '';
         container.className = 'jq-shell';
@@ -4983,6 +4984,12 @@
         homeButton.textContent = 'Home';
         homeButton.addEventListener('click', callbacks.onHome);
         rail.appendChild(homeButton);
+
+        var showsButton = document.createElement('button');
+        showsButton.className = 'jq-rail-item jq-focusable jq-nav-shows';
+        showsButton.textContent = 'Shows';
+        showsButton.addEventListener('click', callbacks.onShows);
+        rail.appendChild(showsButton);
 
         var searchButton = document.createElement('button');
         searchButton.className = 'jq-rail-item jq-focusable jq-nav-search';
@@ -5080,6 +5087,7 @@
         window.JellyQuestShell.render(root, {
             onSwitchProfile: function () { showProfiles(root); },
             onHome: showHome,
+            onShows: showShows,
             onSearch: showSearch,
             onRequests: showRequests,
         });
@@ -5101,6 +5109,15 @@
         window.JellyQuestSearchScreen.render(window.JellyQuestShell.getContent(), {
             onSelectItem: function (item) { showItem(item, showSearch); },
         });
+    }
+
+    function showShows() {
+        showLibrary({
+            title: 'Shows',
+            includeItemTypes: 'Series',
+            sortBy: 'SortName',
+            sortOrder: 'Ascending',
+        }, showHome);
     }
 
     function showLibrary(row, returnTo) {

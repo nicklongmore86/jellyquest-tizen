@@ -58,6 +58,7 @@
         window.JellyQuestShell.render(root, {
             onSwitchProfile: function () { showProfiles(root); },
             onHome: showHome,
+            onShows: showShows,
             onSearch: showSearch,
             onRequests: showRequests,
         });
@@ -79,6 +80,15 @@
         window.JellyQuestSearchScreen.render(window.JellyQuestShell.getContent(), {
             onSelectItem: function (item) { showItem(item, showSearch); },
         });
+    }
+
+    function showShows() {
+        showLibrary({
+            title: 'Shows',
+            includeItemTypes: 'Series',
+            sortBy: 'SortName',
+            sortOrder: 'Ascending',
+        }, showHome);
     }
 
     function showLibrary(row, returnTo) {

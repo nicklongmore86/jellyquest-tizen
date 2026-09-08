@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
 import { startServer } from './support/server.mjs';
+import { assertPainted } from './support/paint.mjs';
 import { assertSiblingSpacing } from './support/spacing.mjs';
 
 const server = await startServer();
@@ -113,7 +114,7 @@ test('selecting a profile switches instantly: no page navigation, no login step'
         assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Alice');
         assert.deepEqual(
             await page.evaluate(() => Array.from(document.querySelectorAll('.jq-rail-item')).map((el) => el.textContent)),
-            ['Alice', 'Home', 'Search', 'Requests']
+            ['Alice', 'Home', 'Shows', 'Search', 'Requests']
         );
     } finally {
         await browser.close();
@@ -166,14 +167,36 @@ test('the rail itself: down/up move through its items, right leaves it for Home 
         await page.keyboard.press('ArrowLeft'); // from Home's autofocused card into the rail
 
         assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Home');
+        const geometry = await page.evaluate(() => {
+            const rail = document.querySelector('.jq-rail');
+            const items = Array.from(rail.querySelectorAll('.jq-rail-item'));
+            return {
+                railHeight: rail.clientHeight,
+                scrollRange: rail.scrollHeight - rail.clientHeight,
+                itemHeights: items.map((item) => Math.round(item.getBoundingClientRect().height)),
+                itemTops: items.map((item) => Math.round(item.getBoundingClientRect().top)),
+            };
+        });
+        assert.equal(geometry.railHeight, 1080, 'the test must exercise the household viewport height');
+        assert.equal(geometry.scrollRange, 0, 'five rail items must fit without creating a rail scrollport');
+        assert.deepEqual(geometry.itemHeights, [46, 46, 46, 46, 46]);
+        assert.deepEqual(geometry.itemTops, [48, 118, 188, 258, 328],
+            'the fifth item must preserve the measured 24px sibling spacing');
+        await assertPainted(page.locator(':focus'));
+        await page.keyboard.press('ArrowDown');
+        assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Shows');
+        await assertPainted(page.locator(':focus'));
         await page.keyboard.press('ArrowDown');
         assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Search');
+        await assertPainted(page.locator(':focus'));
         await page.keyboard.press('ArrowDown');
         assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Requests');
-        await page.keyboard.press('ArrowUp');
-        await page.keyboard.press('ArrowUp');
-        await page.keyboard.press('ArrowUp');
-        assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Alice');
+        await assertPainted(page.locator(':focus'));
+        for (const expected of ['Search', 'Shows', 'Home', 'Alice']) {
+            await page.keyboard.press('ArrowUp');
+            assert.equal(await page.evaluate(() => document.activeElement.textContent), expected);
+            await assertPainted(page.locator(':focus'));
+        }
 
         // Right from the rail re-enters Home's content.
         await page.keyboard.press('ArrowRight');

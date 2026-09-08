@@ -524,7 +524,7 @@ async function releaseBridge(page) {
 function activeClass(page) {
     return page.evaluate(() => {
         const active = document.activeElement;
-        const names = ['jq-nav-home', 'jq-nav-search', 'jq-nav-requests', 'jq-profile-switch', 'jq-requests-input', 'jq-requests-retry'];
+        const names = ['jq-nav-home', 'jq-nav-shows', 'jq-nav-search', 'jq-nav-requests', 'jq-profile-switch', 'jq-requests-input', 'jq-requests-retry'];
         return names.find((name) => active.classList.contains(name)) || active.className || active.tagName;
     });
 }
@@ -548,7 +548,8 @@ for (const outcome of ['success', 'HTTP 500']) {
             await page.getByText('Loading Requests configuration…', { exact: true }).waitFor();
 
             await page.keyboard.press('ArrowUp'); // Requests -> Search
-            await page.keyboard.press('ArrowUp'); // Search   -> Home
+            await page.keyboard.press('ArrowUp'); // Search   -> Shows
+            await page.keyboard.press('ArrowUp'); // Shows    -> Home
             assert.equal(await activeClass(page), 'jq-nav-home');
             await configuration.release();
 
@@ -632,7 +633,8 @@ test('a delayed Requests session preserves a newer rendered rail selection', asy
         await enterRequestsAndHold(page);
 
         await page.keyboard.press('ArrowUp'); // Requests -> Search
-        await page.keyboard.press('ArrowUp'); // Search   -> Home
+        await page.keyboard.press('ArrowUp'); // Search   -> Shows
+        await page.keyboard.press('ArrowUp'); // Shows    -> Home
         assert.equal(await activeClass(page), 'jq-nav-home',
             'the delayed-session precondition must leave a real selection on Home');
         await assertPainted(page.locator(':focus'));
