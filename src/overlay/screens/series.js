@@ -211,9 +211,16 @@
             }
             buildSeasonControl(seasons);
             currentSeasonId = initialSeason(seasons).Id;
-            if (Array.isArray(callbacks.initialEpisodes)) {
+            var cachedEpisodes = callbacks.initialEpisodes;
+            var cacheMatches = Array.isArray(cachedEpisodes) && cachedEpisodes.every(function (episode) {
+                return episode.SeriesId === item.Id;
+            });
+            if (cacheMatches) {
                 allEpisodes = callbacks.initialEpisodes;
-                prepareEpisodes(focusAtRequest).catch(showEpisodeFailure);
+                var cachedToken = episodeRequest;
+                prepareEpisodes(focusAtRequest, cachedToken).catch(function (error) {
+                    showEpisodeFailure(error, focusAtRequest, cachedToken, 'Cached Series episodes failed:');
+                });
             } else {
                 loadEpisodes(focusAtRequest);
             }
@@ -350,36 +357,30 @@
                 if (!isCurrentRender() || token !== episodeRequest) return;
                 allEpisodes = orderEpisodes((result && result.Items) || []);
                 if (callbacks.onEpisodesLoaded) callbacks.onEpisodesLoaded(allEpisodes);
-                return prepareEpisodes(focusAnchor);
-            }).catch(showEpisodeFailure);
-
-            function showEpisodeFailure(error) {
-                if (!isCurrentRender() || token !== episodeRequest) return;
-                allEpisodes = null;
-                setStatus('Couldn’t load this show’s episodes. Try again.', true);
-                window.JellyQuestFocus.focusFirst(container, focusAnchor);
-                console.error('[JellyQuest] Series episodes failed:', error);
-            }
+                return prepareEpisodes(focusAnchor, token);
+            }).catch(function (error) {
+                showEpisodeFailure(error, focusAnchor, token, 'Series episodes failed:');
+            });
         }
 
-        function prepareEpisodes(focusAnchor) {
+        function prepareEpisodes(focusAnchor, token) {
             return resolvePlaybackActions(allEpisodes).catch(function (error) {
                 playError.textContent = 'Couldn’t load playback actions. Browse episodes below.';
                 playError.hidden = false;
                 console.error('[JellyQuest] Series playback actions failed:', error);
             }).then(function () {
-                if (!isCurrentRender() || !allEpisodes) return;
+                if (!isCurrentRender() || token !== episodeRequest || !allEpisodes) return;
                 selectSeasonById(currentSeasonId);
                 window.JellyQuestFocus.focusFirst(container, focusAnchor);
             });
         }
 
-        function showEpisodeFailure(error) {
-            if (!isCurrentRender()) return;
+        function showEpisodeFailure(error, focusAnchor, token, logLabel) {
+            if (!isCurrentRender() || token !== episodeRequest) return;
             allEpisodes = null;
             setStatus('Couldn’t load this show’s episodes. Try again.', true);
-            window.JellyQuestFocus.focusFirst(container, focusAtRequest);
-            console.error('[JellyQuest] Cached Series episodes failed:', error);
+            window.JellyQuestFocus.focusFirst(container, focusAnchor);
+            console.error('[JellyQuest] ' + logLabel, error);
         }
 
         function selectSeasonById(seasonId) {

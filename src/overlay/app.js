@@ -222,6 +222,9 @@
     // Continue wrong on return. A rejected request also invalidates
     // conservatively. Leaving this navigation flow (including switching
     // profiles) drops the closure and therefore the cache; nothing is global.
+    // This governs later renders only. Playback finishing does not recompute
+    // actions on an already-mounted Series or Detail screen; that is a known
+    // app-wide property, byte-identical before this cache, and separate work.
     function showSeries(item, returnTo, seriesState) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
