@@ -75,17 +75,27 @@
             : null;
         var heading = document.createElement('h1');
         heading.className = 'jq-detail-title';
-        heading.textContent = episodeText
+        var headingName = document.createElement('span');
+        headingName.className = 'jq-detail-title-name';
+        headingName.textContent = episodeText
             ? episodeText.title
             : item.Name + (item.ProductionYear ? ' (' + item.ProductionYear + ')' : '');
-        container.appendChild(heading);
+        heading.appendChild(headingName);
 
+        // Keep episode identity in the title line instead of adding another
+        // block before the actions. MEASURED: the former block moved the
+        // action row from y=165 to y=215; after pointer activation, the
+        // polyfill ranked from its saved mouse starting point and ArrowLeft
+        // selected Start Over before the rail. An inline, smaller label keeps
+        // the established action geometry while retaining all context.
         if (episodeText && episodeText.meta) {
-            var episodeContext = document.createElement('p');
+            var episodeContext = document.createElement('span');
             episodeContext.className = 'jq-detail-context';
             episodeContext.textContent = episodeText.meta;
-            container.appendChild(episodeContext);
+            heading.appendChild(document.createTextNode(' '));
+            heading.appendChild(episodeContext);
         }
+        container.appendChild(heading);
 
         var actions = document.createElement('div');
         actions.className = 'jq-row jq-detail-actions';

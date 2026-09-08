@@ -40,10 +40,34 @@ test('Episode Detail reuses browse-card context and autofocuses Resume', async (
     await openHomeItem(page, 'episode-516');
     await page.waitForSelector('.jq-detail-screen');
 
-    assert.equal(await page.locator('.jq-detail-title').textContent(), 'PAW Patrol');
+    assert.equal(await page.locator('.jq-detail-title-name').textContent(), 'PAW Patrol');
     assert.equal(await page.locator('.jq-detail-context').textContent(), 'S6 E27 · PAW Patrol 6x27');
     assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Resume');
     await assertPainted(page.locator('.jq-detail-context'));
+    await assertPainted(page.locator(':focus'));
+}));
+
+test('Episode Detail exits from its first action to the rail with one ArrowLeft', async () => withPage(async (page) => {
+    await openHomeItem(page, 'episode-516');
+    await page.waitForSelector('.jq-detail-overview');
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Resume');
+
+    await page.keyboard.press('ArrowLeft');
+
+    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-rail-item')), true);
+    await assertPainted(page.locator(':focus'));
+}));
+
+test('Movie Detail exits from its first action to the rail with one ArrowLeft', async () => withPage(async (page) => {
+    // Programmatic activation matches detail.spec.mjs's established Movie
+    // setup and does not leave a pointer starting point in the polyfill.
+    await page.evaluate(() => document.querySelector('[data-item-id="movie-1"]').click());
+    await page.getByRole('button', { name: 'Trailer', exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Resume');
+
+    await page.keyboard.press('ArrowLeft');
+
+    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-rail-item')), true);
     await assertPainted(page.locator(':focus'));
 }));
 
@@ -108,15 +132,15 @@ test('Series seam exits by Enter, hardware Back, and ArrowLeft to the rail', asy
 
     await page.keyboard.press('Enter');
     await page.waitForSelector('.jq-home-row-heading');
-    assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), 'movie-1');
+    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-media-card')), true);
 
     await reopenSeries(page);
     await page.keyboard.press('Escape');
     await page.waitForSelector('.jq-home-row-heading');
-    assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), 'movie-1');
+    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-media-card')), true);
 
     await reopenSeries(page);
     await page.keyboard.press('ArrowLeft');
-    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-nav-requests')), true);
+    assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-rail-item')), true);
     await assertPainted(page.locator(':focus'));
 }));

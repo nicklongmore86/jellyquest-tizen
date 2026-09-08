@@ -200,11 +200,11 @@
     // drops to the meta line; inside a show's own page the show name is
     // already on screen, so the episode's name leads.
     //
-    // `options.context` is 'browse' (the default -- Home, Library, Search) or
-    // 'series'. NOT EXERCISED BY THE APP IN THIS PR: nothing passes 'series'
-    // yet, because the series screen is S4's task and inventing one here to
-    // demonstrate the mechanism was out of scope. The 'browse' branch does
-    // have a real caller -- Home's Continue Watching row queries
+    // `context` is 'browse' (the default -- Home, Library, Search) or
+    // 'series'. Nothing passes 'series' in production yet: S3's Series seam
+    // is deliberately an inert placeholder and renders no episode cards;
+    // S4 supplies that caller when it builds the browser. The 'browse' branch
+    // has a real caller -- Home's Continue Watching row queries
     // 'Movie,Episode' (screens/home.js).
     function cardText(item, context) {
         var numbering = item.Type === 'Episode' ? episodeNumbering(item) : '';
@@ -265,8 +265,11 @@
 
     window.JellyQuestCards = {
         createCard: createCard,
-        // Detail uses the same browse-context label as the card that opened
-        // it, so episode identity cannot drift into a second convention.
+        // Detail explicitly uses this formatter with 'browse' because Home is
+        // the only production Episode entry point today. This shares the
+        // current wording; it does not carry an opening card's context. S4
+        // must pass route context if Series-page cards should open Detail in
+        // the 'series' form.
         textFor: cardText
     };
 })();

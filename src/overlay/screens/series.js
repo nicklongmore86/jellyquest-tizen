@@ -17,6 +17,8 @@
         // Keep Back immediately below the title. Besides making the only
         // action prominent, this places it alongside the persistent rail so
         // ArrowLeft has a visible rail candidate in the focus geometry.
+        // MEASURED: putting the status first restores the old placeholder's
+        // dead ArrowLeft; this order makes the rail reachable in one press.
         var back = document.createElement('button');
         back.className = 'jq-back-button jq-focusable';
         back.textContent = '< Back';

@@ -53,7 +53,6 @@
 }
 
 .jq-detail-title,
-.jq-detail-context,
 .jq-detail-actions,
 .jq-detail-error {
     flex: 0 0 auto;
@@ -67,7 +66,8 @@
 .jq-detail-context {
     color: #cfd2d6;
     font-size: 22px;
-    margin: 0 0 24px;
+    font-weight: normal;
+    margin-left: 16px;
 }
 
 /* The one child that gives -- see .jq-detail-screen above. */
