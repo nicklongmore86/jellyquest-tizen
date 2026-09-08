@@ -71,7 +71,13 @@
     height: 330px;
 }
 
-.jq-media-card-title {
+/* Both text lines truncate rather than wrap: the footer is a fixed 80px
+   under a fixed artwork box, so a second line would spill past the card and
+   move nothing else -- it would just overlap the next row. An episode's meta
+   line now carries 'S3 E12 - <episode name>' in browse context, which is
+   routinely wider than 188px of content box. */
+.jq-media-card-title,
+.jq-media-card-meta {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;

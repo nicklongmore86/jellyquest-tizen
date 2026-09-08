@@ -8,12 +8,50 @@
     // clipping and viewport intersection both count. See docs/card-artwork.md.
     var observer;
 
+    var CARD_WIDTH = 220;
+    var POSTER_HEIGHT = 330;  // 2:3, the shape of a Movie/Series/Season poster.
+    var STILL_HEIGHT = 124;   // 16:9 at 220px wide, rounded to whole pixels.
+
+    // Card SHAPE follows the item's Type alone, never the artwork that
+    // happens to exist, so a row of episodes stays a row of equal boxes and
+    // focus geometry is fixed before any decode. A Season is a poster like
+    // its Series -- MEASURED as wrong in the merged code, which gave Season
+    // the 124px episode still box while every Season poster is 2:3.
+    function isPosterShaped(item) {
+        return item.Type === 'Movie' || item.Type === 'Series' || item.Type === 'Season';
+    }
+
+    // Which IMAGE to request is a separate decision, made from what the item
+    // actually carries, preferring one whose native aspect matches the slot.
+    //
+    // MEASURED on the household server (Jellyfin 10.11.11; reported in the
+    // task brief, not probed from this worktree): 26.4% of episodes -- ~559 of
+    // 2118 -- carry no Primary still, while 99.86% of episodes have a parent
+    // backdrop that was never requested. The merged code hardcoded type
+    // 'Primary' and so fell through to the SERIES POSTER for those: a 2:3
+    // image letterboxed by `object-fit: contain` to 124 * 220/330 = 82.7px
+    // inside a 220px still box, and identical on every affected episode of the
+    // same show. The parent backdrop is 16:9 and fills the slot.
     function artworkSource(item) {
+        var height = isPosterShaped(item) ? POSTER_HEIGHT : STILL_HEIGHT;
         if (item.ImageTags && item.ImageTags.Primary) {
-            return { id: item.Id, tag: item.ImageTags.Primary };
+            return { id: item.Id, tag: item.ImageTags.Primary, type: 'Primary', index: null, height: height };
         }
-        if (item.Type === 'Episode' && item.SeriesId && item.SeriesPrimaryImageTag) {
-            return { id: item.SeriesId, tag: item.SeriesPrimaryImageTag };
+        if (item.Type === 'Episode' && item.ParentBackdropItemId
+            && item.ParentBackdropImageTags && item.ParentBackdropImageTags.length) {
+            // index 0 is explicit because the tag we pin is tags[0]; the real
+            // client turns type/index into path components (docs/card-artwork.md).
+            return { id: item.ParentBackdropItemId, tag: item.ParentBackdropImageTags[0],
+                type: 'Backdrop', index: 0, height: height };
+        }
+        // Last resort, kept rather than removed so nothing that shows an image
+        // today stops showing one. For a Season this is the CORRECT shape (the
+        // show's own 2:3 poster in a 2:3 slot); for an Episode it is the
+        // letterboxed poster described above, now reached only when the parent
+        // backdrop is genuinely absent.
+        if ((item.Type === 'Episode' || item.Type === 'Season')
+            && item.SeriesId && item.SeriesPrimaryImageTag) {
+            return { id: item.SeriesId, tag: item.SeriesPrimaryImageTag, type: 'Primary', index: null, height: height };
         }
         return null;
     }
@@ -43,11 +81,17 @@
         var client = window.ApiClient;
         if (!source || !client || typeof client.getImageUrl !== 'function') return;
         var url;
+        // The real client mutates the options object, so build a fresh one per
+        // attempt (docs/card-artwork.md). Every type keeps the same pattern:
+        // an explicit format plus size bounds, and quality 80, which alone
+        // forecloses the server's return-the-original passthrough (>= 90).
+        var options = {
+            type: source.type, tag: source.tag, maxWidth: CARD_WIDTH,
+            maxHeight: source.height, quality: 80, format: 'webp'
+        };
+        if (source.index !== null) options.index = source.index;
         try {
-            url = client.getImageUrl(source.id, {
-                type: 'Primary', tag: source.tag, maxWidth: 220,
-                maxHeight: source.height, quality: 80, format: 'webp'
-            });
+            url = client.getImageUrl(source.id, options);
         } catch (_error) {
             failImage(card);
             return;
@@ -67,11 +111,9 @@
     // retryBudget is an optional mutable { failures } object. The Library
     // passes the same object whenever windowing recreates one item, so a new
     // card does not reset that screen render's three-attempt cap.
-    function observeArtwork(card, item, retryBudget) {
-        var source = artworkSource(item);
+    function observeArtwork(card, source, retryBudget) {
         // Safely retain text-only cards on hosts without the supported API.
         if (!source || !window.IntersectionObserver) return;
-        source.height = item.Type === 'Movie' || item.Type === 'Series' ? 330 : 124;
         // Once a shared budget reaches three, recreation leaves the card
         // text-only for the rest of this Library visit even if the network
         // recovers. A new screen render creates a fresh budget. This matches
@@ -124,25 +166,62 @@
         observer.observe(card);
     }
 
+    // 'S3 E12', or '' when the server did not number the episode -- the
+    // fixture's virtual PAW Patrol placeholders and real specials routinely
+    // lack one of the two.
+    function episodeNumbering(item) {
+        var parts = '';
+        if (typeof item.ParentIndexNumber === 'number') parts += 'S' + item.ParentIndexNumber;
+        if (typeof item.IndexNumber === 'number') parts += (parts ? ' ' : '') + 'E' + item.IndexNumber;
+        return parts;
+    }
+
+    // Decision 3: an episode card's PRIMARY text is contextual. On Home you
+    // are picking a show, so the show's name leads and the episode's own name
+    // drops to the meta line; inside a show's own page the show name is
+    // already on screen, so the episode's name leads.
+    //
+    // `options.context` is 'browse' (the default -- Home, Library, Search) or
+    // 'series'. NOT EXERCISED BY THE APP IN THIS PR: nothing passes 'series'
+    // yet, because the series screen is S4's task and inventing one here to
+    // demonstrate the mechanism was out of scope. The 'browse' branch does
+    // have a real caller -- Home's Continue Watching row queries
+    // 'Movie,Episode' (screens/home.js).
+    function cardText(item, context) {
+        var numbering = item.Type === 'Episode' ? episodeNumbering(item) : '';
+        if (item.Type === 'Episode' && context !== 'series' && item.SeriesName) {
+            return {
+                title: item.SeriesName,
+                // Keep the episode identifiable: a Continue Watching row from
+                // one show would otherwise be several identical cards.
+                meta: numbering ? numbering + ' · ' + item.Name : item.Name
+            };
+        }
+        if (item.Type === 'Episode') {
+            return { title: item.Name, meta: numbering };
+        }
+        return { title: item.Name, meta: item.ProductionYear ? String(item.ProductionYear) : '' };
+    }
+
     function createCard(item, options) {
         options = options || {};
+        var source = artworkSource(item);
         var card = document.createElement('button');
         card.className = 'jq-card jq-focusable jq-media-card';
         card.setAttribute('data-item-id', item.Id);
-        if (item.Type === 'Movie' || item.Type === 'Series') card.className += ' jq-media-card-poster';
-        if (item.Type !== 'Movie' && item.Type !== 'Series' && (item.Type === 'Episode' || artworkSource(item))) {
-            card.className += ' jq-media-card-episode';
-        }
+        if (isPosterShaped(item)) card.className += ' jq-media-card-poster';
+        else if (item.Type === 'Episode' || source) card.className += ' jq-media-card-episode';
 
+        var text = cardText(item, options.context);
         var title = document.createElement('span');
         title.className = 'jq-media-card-title';
-        title.textContent = item.Name;
+        title.textContent = text.title;
         card.appendChild(title);
 
-        if (item.ProductionYear) {
+        if (text.meta) {
             var meta = document.createElement('small');
             meta.className = 'jq-media-card-meta';
-            meta.textContent = String(item.ProductionYear);
+            meta.textContent = text.meta;
             card.appendChild(meta);
         }
 
@@ -161,7 +240,7 @@
         if (options.onSelect) {
             card.addEventListener('click', function () { options.onSelect(item); });
         }
-        observeArtwork(card, item, options.artworkRetryBudget);
+        observeArtwork(card, source, options.artworkRetryBudget);
         return card;
     }
 
