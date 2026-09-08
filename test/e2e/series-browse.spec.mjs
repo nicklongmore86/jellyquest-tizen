@@ -61,11 +61,32 @@ async function renderSeriesDirectly(page, item) {
                 onBack() {},
                 onSelectItem(episode) { window.__selected.push(episode.Id); },
                 onSeasonChange() {},
+                onPlay(episode, startPositionTicks) {
+                    window.__directPlays = window.__directPlays || [];
+                    window.__directPlays.push({ id: episode.Id, startPositionTicks });
+                    return Promise.resolve();
+                },
             }
         );
     }, item);
     await page.waitForSelector('.jq-series-screen');
 }
+
+test('the direct-render harness can activate a Series action without an uncaught callback error', async () => withPage(async (page) => {
+    const pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await renderSeriesDirectly(page, {
+        Id: 'series-paw-patrol', Name: 'PAW Patrol', Type: 'Series', ServerId: 'dev-server-1',
+    });
+    await page.getByRole('button', { name: 'Resume', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Resume', exact: true }).click();
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+    assert.deepEqual(pageErrors, []);
+    assert.deepEqual(await page.evaluate(() => window.__directPlays), [{
+        id: 'episode-516', startPositionTicks: 6000000000,
+    }]);
+}));
 
 // Programmatic activation, matching detail.spec.mjs's and
 // series-routing.spec.mjs's established convention: a real Playwright click
@@ -242,6 +263,64 @@ test('an episode opens Detail, and Back returns to the season it was chosen from
     await page.waitForFunction(() =>
         document.querySelector('.jq-series-episodes .jq-media-card .jq-media-card-meta')?.textContent === 'S2 E1');
     await assertPainted(page.locator(':focus'));
+}));
+
+test('Back from an unplayed Episode Detail reuses the ordered Series list', async () => withPage(async (page) => {
+    await page.evaluate(() => {
+        window.__seriesEpisodeQueries = [];
+        const getEpisodes = window.ApiClient.getEpisodes.bind(window.ApiClient);
+        window.ApiClient.getEpisodes = function (id, options) {
+            return getEpisodes(id, options).then((result) => {
+                window.__seriesEpisodeQueries.push({
+                    items: result.Items.length,
+                    bytes: new Blob([JSON.stringify(result)]).size,
+                });
+                return result;
+            });
+        };
+    });
+    await openSeriesOne(page);
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+    await openSeasonMenu(page);
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('[data-item-id="episode-17"]');
+
+    await page.evaluate(() => document.querySelector('[data-item-id="episode-17"]').click());
+    await page.waitForSelector('.jq-detail-screen');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+
+    assert.equal(await page.locator('.jq-series-season-button').textContent(), 'Season 2 ▾');
+    const queries = await page.evaluate(() => window.__seriesEpisodeQueries);
+    assert.equal(queries.length, 1, `expected one whole-series response, got ${JSON.stringify(queries)}`);
+    assert.equal(queries[0].items, 354);
+}));
+
+// NON-REGRESSION GUARD: master also fetched twice because it had no cache.
+// With the navigation-local cache this becomes load-bearing: a playback
+// request can update episode UserData, so Back must refetch before deriving
+// Resume/Continue rather than reuse the pre-playback list.
+test('playback from Episode Detail invalidates the ordered Series list before Back', async () => withPage(async (page) => {
+    await page.evaluate(() => {
+        window.__seriesEpisodeQueryCount = 0;
+        const getEpisodes = window.ApiClient.getEpisodes.bind(window.ApiClient);
+        window.ApiClient.getEpisodes = function (id, options) {
+            window.__seriesEpisodeQueryCount += 1;
+            return getEpisodes(id, options);
+        };
+    });
+    await openSeriesOne(page);
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+    await page.evaluate(() => document.querySelector('[data-item-id="episode-1"]').click());
+    await page.getByRole('button', { name: 'Play', exact: true }).click();
+    await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
+    await page.evaluate(() => window.playbackManager.__endPlayback());
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
+
+    assert.equal(await page.evaluate(() => window.__seriesEpisodeQueryCount), 2,
+        'return after playback must refetch current UserData');
 }));
 
 test('the browser exits by Enter on Back, hardware Back, and ArrowLeft to the rail', async () => withPage(async (page) => {
