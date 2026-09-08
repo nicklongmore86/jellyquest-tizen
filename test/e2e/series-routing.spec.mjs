@@ -103,19 +103,29 @@ test('Episode Resume and Play use ids, item serverId, and the requested position
     }
 });
 
-test('Series routes to its own screen and offers no playback action of its own', async () => withPage(async (page) => {
+test('Series routes to its own screen and offers its series-level playback actions', async () => withPage(async (page) => {
+    await page.evaluate(() => {
+        const getEpisodes = window.ApiClient.getEpisodes.bind(window.ApiClient);
+        window.ApiClient.getEpisodes = function (id, options) {
+            return getEpisodes(id, options).then((result) => ({
+                ...result,
+                Items: result.Items.map((episode) => episode.Id === 'episode-1' ? {
+                    ...episode,
+                    UserData: { PlaybackPositionTicks: 300000000, LastPlayedDate: '2026-09-08T00:00:00Z', Played: false },
+                } : episode),
+            }));
+        };
+    });
     await openHomeItem(page, 'series-1');
-    await page.waitForSelector('.jq-series-season-button');
+    await page.waitForSelector('.jq-series-episodes .jq-media-card');
 
     assert.equal(await page.locator('.jq-series-title').textContent(), 'Northern Stories 1');
-    // NON-REGRESSION GUARD, unchanged in substance from the S3 seam's version
-    // of this test: a Series is a folder and is not itself playable, so the
-    // screen behind this route must never grow a Play/Resume action or reach
-    // playback. Only the "no show queries" clause is gone -- S4's browser
-    // exists precisely to make those queries.
-    assert.equal(await page.locator('.jq-detail-action').count(), 0);
+    // The Series object remains a folder and is never sent to playback; these
+    // controls resolve to Episodes behind the Series route.
+    assert.deepEqual(await page.locator('.jq-series-actions .jq-detail-action')
+        .evaluateAll((buttons) => buttons.map((button) => button.textContent)),
+    ['Resume', 'Continue', 'Restart Episode']);
     assert.equal(await page.evaluate(() => window.playbackManager.__calls.length), 0);
-    assert.equal(await page.evaluate(
-        () => document.activeElement.classList.contains('jq-series-season-button')), true);
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), 'Resume');
     await assertPainted(page.locator(':focus'));
 }));

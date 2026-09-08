@@ -228,6 +228,12 @@
             onBack: returnTo,
             initialSeasonId: state.seasonId,
             onSeasonChange: function (changedTo) { state.seasonId = changedTo; },
+            onPlay: function (episode, startPositionTicks) {
+                return requestPlayback(episode, {
+                    ids: [episode.Id],
+                    startPositionTicks: startPositionTicks
+                });
+            },
             // An episode opens its Detail page rather than playing outright
             // (household decision 5): instant play would save one press and
             // lose Start Over, My List and any future track choice. Episode

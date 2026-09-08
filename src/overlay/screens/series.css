@@ -18,6 +18,15 @@
     margin: 0 0 12px;
 }
 
+.jq-series-actions {
+    margin: 16px 0 20px;
+}
+
+.jq-series-actions:empty,
+.jq-series-play-error[hidden] {
+    display: none;
+}
+
 .jq-series-controls {
     margin: 16px 0 20px;
 }

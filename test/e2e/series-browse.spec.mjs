@@ -134,7 +134,10 @@ test('a show opens on its first season with the contextual episode label', async
         assert.notEqual(card.title, 'Northern Stories 1', 'the show name must not lead inside the show');
     }
 
-    // The ORDINARY autofocus case. Removing the identity clause in
+    // The show action resolver has completed before the cards mount. Alice
+    // has no progress in this series and the fixture has no Next Up answer,
+    // so the season selector remains the primary focus target.
+    // Removing the identity clause in
     // focus.js's focusFirst() (`document.activeElement !== expectedFocus`)
     // breaks exactly this assertion -- see the PR body's mutation run.
     const focus = await focusSnapshot(page);
@@ -153,7 +156,7 @@ test('episode requests carry the virtual-record switches and no ignored sort or 
     assert.deepEqual(calls.seasons, [{ id: 'series-1', options: { UserId: 'user-alice' } }]);
     assert.deepEqual(calls.episodes, [{
         id: 'series-1',
-        options: { UserId: 'user-alice', SeasonId: 'season-1', IsMissing: false, IsVirtualUnaired: false },
+        options: { UserId: 'user-alice', IsMissing: false, IsVirtualUnaired: false },
     }]);
     // MEASURED on the household server: this endpoint accepts and silently
     // ignores Filters/SortBy/SortOrder, so sending them would look like it
@@ -186,7 +189,7 @@ test('the episode list is ordered client-side, not in the order the server repli
         Array.from({ length: 15 }, (_, index) => `S1 E${index + 1}`));
 }));
 
-test('choosing a season reloads the list and leaves the cursor on the selector', async () => withPage(async (page) => {
+test('choosing a season reuses the whole-series list and leaves the cursor on the selector', async () => withPage(async (page) => {
     await recordShowQueries(page);
     await openSeriesOne(page);
     await page.waitForSelector('.jq-series-episodes .jq-media-card');
@@ -213,7 +216,7 @@ test('choosing a season reloads the list and leaves the cursor on the selector',
     await assertPainted(page.locator(':focus'));
 
     const calls = await page.evaluate(() => window.__showCalls.episodes.map((call) => call.options.SeasonId));
-    assert.deepEqual(calls, ['season-1', 'season-2']);
+    assert.deepEqual(calls, [undefined], 'season switches must not refetch a list already needed by show actions');
 }));
 
 test('an episode opens Detail, and Back returns to the season it was chosen from', async () => withPage(async (page) => {
@@ -484,7 +487,7 @@ test('a failed episode request says so, and re-choosing the season is the retry'
     });
     await openSeriesOne(page);
     await page.waitForFunction(() =>
-        document.querySelector('.jq-series-status')?.textContent === 'Couldn’t load this season’s episodes. Try again.');
+        document.querySelector('.jq-series-status')?.textContent === 'Couldn’t load this show’s episodes. Try again.');
 
     assert.equal(await page.locator('.jq-series-episodes .jq-media-card').count(), 0);
     assert.equal((await focusSnapshot(page)).className.includes('jq-series-season-button'), true);
@@ -510,7 +513,7 @@ test('a late episode response does not steal a newer rail selection', async () =
     await page.evaluate(() => document.querySelector('.jq-nav-search').focus());
     await assertPainted(page.locator('.jq-nav-search'));
     await page.evaluate(() => window.__resolveEpisodes({
-        Items: [{ Id: 'late-episode', Name: 'Late episode', Type: 'Episode', ParentIndexNumber: 1, IndexNumber: 1 }],
+        Items: [{ Id: 'late-episode', Name: 'Late episode', Type: 'Episode', SeasonId: 'season-1', ParentIndexNumber: 1, IndexNumber: 1 }],
         TotalRecordCount: 1,
     }));
     await page.waitForSelector('[data-item-id="late-episode"]');
