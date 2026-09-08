@@ -44,11 +44,24 @@
             return { id: item.ParentBackdropItemId, tag: item.ParentBackdropImageTags[0],
                 type: 'Backdrop', index: 0, height: height };
         }
-        // Last resort, kept rather than removed so nothing that shows an image
-        // today stops showing one. For a Season this is the CORRECT shape (the
-        // show's own 2:3 poster in a 2:3 slot); for an Episode it is the
-        // letterboxed poster described above, now reached only when the parent
-        // backdrop is genuinely absent.
+        // Last resort, and LIVE IN PRODUCTION -- not a defensive branch, and
+        // not dead code to be tidied away. SOURCE-CONFIRMED against Jellyfin
+        // 10.11.11 (read from tagged server source, NOT probed against the
+        // household's server): SeriesPrimaryImageTag is populated
+        // unconditionally for any episode or season with a valid series, at
+        // Emby.Server.Implementations/Dto/DtoService.cs:1213-1225 (episodes)
+        // and :1265-1277 (seasons). So on the real server every episode that
+        // reaches here carries this tag, and this is the last thing standing
+        // between the viewer and a text-only card.
+        //
+        // For a Season this is also the CORRECT shape (the show's own 2:3
+        // poster in a 2:3 slot); for an Episode it is the letterboxed poster
+        // described above, now reached only when the parent backdrop is
+        // genuinely absent -- one episode in 700 in the fixture.
+        //
+        // What is synthetic is only the FIXTURE's coverage of this tier: the
+        // stub projects no SeriesPrimaryImageTag, so the tests that exercise
+        // it build their own items. See docs/card-artwork.md.
         if ((item.Type === 'Episode' || item.Type === 'Season')
             && item.SeriesId && item.SeriesPrimaryImageTag) {
             return { id: item.SeriesId, tag: item.SeriesPrimaryImageTag, type: 'Primary', index: null, height: height };
@@ -166,9 +179,15 @@
         observer.observe(card);
     }
 
-    // 'S3 E12', or '' when the server did not number the episode -- the
-    // fixture's virtual PAW Patrol placeholders and real specials routinely
-    // lack one of the two.
+    // 'S3 E12', or '' when the server did not number the episode. MEASURED:
+    // every fixture episode carries both numbers, including the 129 virtual
+    // PAW Patrol placeholders (dev/fixtures/api-client-stub.js:180-184), so no
+    // fixture data exercises this guard.
+    // INFERRED, not established here: that real specials and unmatched files
+    // can lack one or both. Nothing in this task's brief or in this repo
+    // measured that, so the guard is defensive on an unverified premise --
+    // cheap, and it prints '' rather than 'SundefinedEundefined' if the
+    // premise is right.
     function episodeNumbering(item) {
         var parts = '';
         if (typeof item.ParentIndexNumber === 'number') parts += 'S' + item.ParentIndexNumber;

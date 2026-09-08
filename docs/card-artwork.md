@@ -187,6 +187,17 @@ Two decisions were separated, because conflating them is what produced the bug:
   3. for an `Episode` or a `Season`, `SeriesId` + `SeriesPrimaryImageTag`;
   4. otherwise text only.
 
+**Step 3 is live in production and must not be tidied away as dead code.**
+SOURCE-CONFIRMED against Jellyfin 10.11.11 — read from the tagged server
+source, *not* probed against the household's server —
+`SeriesPrimaryImageTag` is populated **unconditionally** for any episode or
+season with a valid series:
+`Emby.Server.Implementations/Dto/DtoService.cs:1213-1225` (episodes) and
+`:1265-1277` (seasons). So on the real server every episode reaching step 3
+carries the tag, and step 3 is the last thing between the viewer and a
+text-only card. What is synthetic is only this repo's **fixture coverage** of
+it — see the limitation below.
+
 MEASURED on the household server (Jellyfin 10.11.11; reported in the S2 brief,
 not probed from this repo): 26.4% of episodes — roughly 559 of 2118 — carry no
 `ImageTags.Primary`, while 99.86% of episodes have a parent backdrop the merged
@@ -205,11 +216,24 @@ box) rather than the box alone.
 
 Across the 700-episode fixture the selection is now 515 own stills, 184 parent
 backdrops and 1 text-only (`episode-700`, deliberately given neither). Before
-this change the same census was 515 / 0 / 185. LIMITATION, stated rather than
-papered over: the fixture does not model `SeriesPrimaryImageTag` on episodes, so
-in the fixture those 185 rendered as text, not as squeezed posters. The squeeze
-itself is reproduced directly by the painted-geometry test above instead of by
-adding an unverified field to the fixture.
+this change the same census was 515 / 0 / 185.
+
+**FIXTURE-FIDELITY GAP, not a production claim.** `dev/fixtures/api-client-stub.js`
+projects no `SeriesPrimaryImageTag` on any item — neither on its 700 episodes
+nor on the four Primary-less PAW Patrol seasons (`season-34`…`season-37`,
+api-client-stub.js:122-131). So *in the fixture* the before-state for those 185
+episodes was text-only, and step 3 is exercised only by tests that build their
+own items (`test/e2e/card-artwork.spec.mjs`). On the household's server the
+before-state was a letterboxed series poster, because that tag is always there
+(DtoService line ranges above). The squeeze itself is reproduced directly by the
+painted-geometry test rather than by editing fixture data.
+
+Closing the gap faithfully means projecting the tag on **all** 37 seasons *and*
+all 700 episodes, which is what the same source citation implies — and that
+moves the census (`none: 1` → `0`) and its `seriesPosterTags` control. Applying
+it to the four Primary-less seasons alone would model the server as populating
+the tag only where `Primary` is missing, which the source says is false. Left as
+follow-up rather than half-done.
 
 `index: 0` is sent explicitly on the backdrop request because the tag pinned is
 `ParentBackdropImageTags[0]` and the real client turns `type`/`index` into path

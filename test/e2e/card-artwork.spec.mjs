@@ -43,6 +43,14 @@ const SELECTION_CASES = [
     // episode still box -- the live inconsistency this case pins.
     { label: 'Season own poster', item: { Type: 'Season', ImageTags: { Primary: 'season-tag' } },
         id: 'item', options: { type: 'Primary', tag: 'season-tag', maxHeight: 330 }, height: 330, shape: 'poster' },
+    // Tier 3, which is LIVE on a real server: SOURCE-CONFIRMED against
+    // Jellyfin 10.11.11, SeriesPrimaryImageTag is populated unconditionally
+    // for any episode or season with a valid series
+    // (Emby.Server.Implementations/Dto/DtoService.cs:1213-1225 for episodes,
+    // :1265-1277 for seasons). Only the FIXTURE's coverage is synthetic: the
+    // stub projects no SeriesPrimaryImageTag, so these two cases build their
+    // own items rather than reading one out of the fixture. Do not read these
+    // literals as evidence that the branch is unreachable in production.
     { label: 'Season falls back to the series poster', item: { Type: 'Season', SeriesId: 'show', SeriesPrimaryImageTag: 'show-tag' },
         id: 'show', options: { type: 'Primary', tag: 'show-tag', maxHeight: 330 }, height: 330, shape: 'poster' },
     { label: 'Episode own still', item: { Type: 'Episode', ImageTags: { Primary: 'still-tag' } },
@@ -462,10 +470,14 @@ test('every fixture episode gets a correctly shaped image or honest text', () =>
         none: 1,        // episode-700: no still, no backdrop, no series poster
         wrongShape: 0,
         wrongBox: 0,
-        // The fixture does not model SeriesPrimaryImageTag on episodes, so in
-        // the fixture the before-state for those 185 was text-only, not a
-        // squeezed poster. The squeeze is reproduced directly by the painted
-        // geometry test above instead of by inventing an unverified field.
+        // FIXTURE-FIDELITY GAP, not a statement about production. The stub
+        // projects no SeriesPrimaryImageTag, so in the fixture the before-state
+        // for those 185 was text-only. On the household's server it was a
+        // letterboxed series poster: SOURCE-CONFIRMED against Jellyfin
+        // 10.11.11, that tag is populated unconditionally for every episode
+        // with a valid series (DtoService.cs:1213-1225), so tier 3 always had
+        // something to serve. The squeeze itself is reproduced directly by the
+        // painted geometry test above.
         seriesPosterTags: 0,
     });
 }));
