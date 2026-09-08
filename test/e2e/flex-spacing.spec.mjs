@@ -64,6 +64,15 @@ async function openScreen(page, screen) {
 for (const [selector, screen, axis, containers = 1] of [
     ['.jq-rail', 'home', 'y'],
     ['.jq-profiles-row', 'profiles', 'x'],
+    // NOT COVERED, and deliberately not pretended otherwise: Home's Next Up
+    // row. Sibling spacing can only be measured between two adjacent
+    // children, and no fixture profile can hold two SURVIVING Next Up cards
+    // -- the fixture library has exactly two series with episodes, so a
+    // profile that demonstrates EnableResumable suppression at all (one
+    // candidate removed, one kept) is left with a single card. The row reuses
+    // .jq-home-row and .jq-home-row-section verbatim, so the rule measured
+    // below is the same rule that governs it, but that is inference, not
+    // measurement. See the PR discussion.
     ['.jq-home-row', 'home', 'x', 2],
     ['.jq-search-results', 'search', 'x'],
     ['.jq-detail-actions', 'detail', 'x'],

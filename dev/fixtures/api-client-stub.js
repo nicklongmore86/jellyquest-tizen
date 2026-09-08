@@ -201,6 +201,39 @@
         },
         'user-bob': {},
         'user-charlie': {},
+        // Dana is the fixture's Next Up profile. She is deliberately the one
+        // with history in BOTH series that have episodes, which is what lets
+        // the library-wide Next Up list be longer than one entry at all --
+        // and she is reachable from no other spec, so this history cannot
+        // move any existing screen's assertions.
+        //
+        //   Northern Stories 1  S8 E8 watched to the end (position 0, so it
+        //                       is NOT resumable). MEASURED (Love Island,
+        //                       72/73 played): with no resumable episode the
+        //                       endpoint returns the first unplayed episode
+        //                       after watched progress -- here episode-114.
+        //                       That episode deliberately has no Primary
+        //                       still, because it is the card that SURVIVES
+        //                       EnableResumable: false and so is the only
+        //                       place the parent-backdrop artwork tier can be
+        //                       exercised on this path.
+        //   PAW Patrol          S7 E7 in progress. MEASURED (Pixel Move,
+        //                       PlayedPercentage 66.2): an in-progress
+        //                       episode is returned ITSELF.
+        'user-dana': {
+            // A part-watched MOVIE as well as the episodes, so Dana's
+            // Continue Watching row is a 410px POSTER row above the 204px
+            // episode row Next Up renders. That heterogeneous stack is the
+            // real television's shape -- MEASURED, the largest profile's
+            // Continue Watching holds 13 mixed items above 8 Next Up
+            // episodes -- and it is the geometry in which walking down the
+            // rows and back up strands the cursor (see focus.js's
+            // revealMargin). A uniform fixture cannot see that class of
+            // defect at all.
+            'movie-6': { LastPlayedDate: '2026-09-10T12:00:00Z', PlaybackPositionTicks: 1500 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
+            'episode-113': { LastPlayedDate: '2026-09-09T12:00:00Z', PlaybackPositionTicks: 0, Played: true, IsFavorite: false },
+            'episode-523': { LastPlayedDate: '2026-09-05T12:00:00Z', PlaybackPositionTicks: 600 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
+        },
     };
 
     // CANNED server answers, not a reimplementation of Jellyfin's
@@ -213,9 +246,94 @@
     // (tv-shows-api.js:110-198). Which episode Jellyfin chooses is server
     // policy and is deliberately represented as fixture data instead of a
     // friendlier guessed algorithm.
+    //
+    // The TRANSPORT of this call is unchanged from PR #33, but the table is
+    // not: Alice and Dana gained entries so that every (user, series) pair
+    // agrees with the library-wide table below and the fixture cannot answer
+    // the same question two ways depending on which screen asked. The one
+    // modelled DIVERGENCE is Bob and Charlie, who have an answer here and
+    // none there; see the library-wide table for why, and for which half of
+    // that pair is measured and which inferred.
     var NEXT_UP = {
+        'user-alice': { 'series-paw-patrol': 'episode-516' },
         'user-bob': { 'series-1': 'episode-1' },
         'user-charlie': { 'series-1': 'episode-1' },
+        'user-dana': { 'series-1': 'episode-114', 'series-paw-patrol': 'episode-523' },
+    };
+
+    // The LIBRARY-WIDE /Shows/NextUp answer -- a SEPARATE canned table, not a
+    // projection of the per-series one. MEASURED library-wide against the
+    // household's Jellyfin 10.11.11:
+    //
+    //   * an in-progress episode is returned ITSELF, not the one after it.
+    //     (The Series screen shows the FOLLOWING episode, but that is
+    //     APPLICATION behaviour -- series.js:424 computes episodeAfter()
+    //     client-side -- not a second endpoint semantic. Do not read a
+    //     measured endpoint difference into it.)
+    //   * with no resumable episode, the first unplayed episode after
+    //     watched progress is returned;
+    //   * fully watched series do not appear (rewatching disabled);
+    //   * entirely untouched series do NOT appear and are NOT offered as
+    //     S1 E1. That much is measured, LIBRARY-WIDE ONLY, and it is why Bob
+    //     and Charlie have NOTHING here.
+    //     INFERRED, NOT PROBED, and the weaker half of this pair: that the
+    //     PER-SERIES call answers episode-1 for those same untouched series.
+    //     That answer is canned fixture data from PR #33; no probe of the
+    //     per-series endpoint on an untouched series was made, so the
+    //     divergence between the two tables rests on an inference, not a
+    //     measurement.
+    //   * ORDER is server policy -- descending MOST RECENT ACTIVITY ANYWHERE
+    //     IN THE SERIES, not the returned episode's own date. Reproduced in
+    //     Dana's list below.
+    //   * EnableResumable: false removes EXACTLY the items with saved
+    //     progress and preserves the order of the rest; it does NOT
+    //     substitute a replacement episode for a removed one.
+    //
+    // Which items a server picks is server policy and stays fixture data.
+    // What is modelled below the table is TRANSPORT: Limit, StartIndex,
+    // TotalRecordCount, Fields, and the accept-and-ignore set.
+    //
+    // LIMITATION: the fixture library contains only two series with episodes
+    // (Northern Stories 1 and PAW Patrol), so no profile's list can honestly
+    // be longer than two entries while one-result-per-series holds. The
+    // household's real lists are 15 (Nick) and 3 (Kids). Limit and StartIndex
+    // are therefore exercised at Limit 1 in the tests rather than at Home's
+    // Limit of 8, which never truncates against this fixture.
+    //
+    // These are the BASELINE lists -- what the endpoint returns with no
+    // EnableResumable in the query. They deliberately contain the resumable
+    // overlap with Continue Watching that the real endpoint has: MEASURED, an
+    // in-progress episode is returned by this call ITSELF, and 7 of Nick's 15
+    // baseline items (47%) and 2 of Kids' 3 (67%) were already on the
+    // Continue Watching row. Suppression is applied below from
+    // EnableResumable, not baked into these lists, so a caller that omits the
+    // parameter still sees the duplication the real server would send.
+    var NEXT_UP_LIBRARY = {
+        'user-alice': ['episode-516'],
+        'user-bob': [],
+        'user-charlie': [],
+        // Ordered by MOST RECENT ACTIVITY IN THE SERIES: Northern Stories 1
+        // was touched on 2026-09-09 and PAW Patrol on 2026-09-05. Note that
+        // the LEADING item, episode-114, has never been played and carries no
+        // date of its own, while episode-523 behind it carries a real one --
+        // the measured Blaze divergence, reproduced. Re-sorting by the
+        // RETURNED item's date inverts this pair.
+        'user-dana': ['episode-114', 'episode-523'],
+    };
+
+    // EnableRewatching=true was MEASURED to change selection SUBSTANTIALLY:
+    // 15 items became 19, played records and fully-watched series appeared,
+    // and one series contributed MULTIPLE entries (two Blaze, two PAW Patrol,
+    // two Euphoria). The SHAPE of that change is measured; the membership
+    // below is CANNED and was not probed -- each profile gains a played
+    // record, and each gains a SECOND entry from a series it already
+    // contributes one from, so any code assuming one result per series fails
+    // here.
+    var NEXT_UP_LIBRARY_REWATCHING = {
+        'user-alice': ['episode-516', 'episode-427'],
+        'user-bob': [],
+        'user-charlie': [],
+        'user-dana': ['episode-114', 'episode-113', 'episode-523'],
     };
 
     // ---- What a LIST response actually contains -------------------------
@@ -312,6 +430,95 @@
     function withUserData(item, userId) {
         var data = (USER_DATA[userId] && USER_DATA[userId][item.Id]) || { PlaybackPositionTicks: 0, Played: false, IsFavorite: false };
         return Object.assign({}, item, { UserData: data });
+    }
+
+    // The LIBRARY-WIDE /Shows/NextUp call. MEASURED against the household's
+    // Jellyfin 10.11.11, library-wide with no SeriesId:
+    //
+    //   HONOURED                     Limit, StartIndex, Fields,
+    //                                EnableRewatching, EnableResumable,
+    //                                NextUpDateCutoff,
+    //                                EnableTotalRecordCount, ParentId
+    //   ACCEPTED AND SILENTLY        SortBy, SortOrder, IsMissing,
+    //   IGNORED                      IsVirtualUnaired
+    //
+    // The ignored sort variants returned a body with the SAME SHA-256 as the
+    // baseline -- the same accept-and-ignore trap already modelled on
+    // getEpisodes. So they are validated here (a value outside the server's
+    // enum is still rejected) and then deliberately NOT applied: an
+    // implementation that asked the server to sort would look correct and be
+    // wrong, and must fail against this fixture instead.
+    //
+    // NextUpDateCutoff, EnableTotalRecordCount and ParentId are honoured on
+    // the real server but are NOT modelled here, because the overlay sends
+    // none of them; the strict option guard rejects them until they are.
+    // DisableFirstEpisode is likewise unmodelled: MEASURED, it had NO
+    // OBSERVABLE EFFECT in the measured state, so the fixture would be
+    // inventing behaviour nobody observed.
+    //
+    // EnableResumable was MEASURED against the accept-and-ignore trap
+    // specifically, because matching the baseline with `true` alone would have
+    // been inconclusive -- an ignored option matches the baseline too. What
+    // establishes that it is HONOURED is the `false` DELTA:
+    //
+    //   Nick  baseline 15 items / 26,195 bytes / sha b0898ecf
+    //         false     8 items / 13,939 bytes / sha 7038da41
+    //   Kids  baseline  3 items /  5,433 bytes / sha b18b27a7
+    //         false     1 item  /  1,830 bytes / sha 170d3e99
+    //
+    // TotalRecordCount tracks it (15 -> 8, 3 -> 1), so the count is taken
+    // AFTER suppression here, not before. MEASURED, the removed ids are
+    // EXACTLY the ones already on the profile's Continue Watching row, the
+    // surviving order is the baseline order, and nothing is substituted for a
+    // removed card. MEASURED, it does not mask EnableRewatching either: the
+    // same ids are removed with rewatching off or on (15 -> 8 and 19 -> 12).
+    //
+    // UserId is REQUIRED, with no fall back to the signed-in user. The
+    // endpoint is user-scoped -- MEASURED, the Kids profile got exactly its
+    // own 3 items and no Nick-only series leaked -- and upstream's own home
+    // Next Up section passes it explicitly
+    // (.cache/jellyfin-web/src/components/homesections/sections/nextUp.ts:26).
+    // A shared television must not be able to render this row from an
+    // ambient identity.
+    function nextUpLibraryWide(options) {
+        validateShowOptions('getNextUpEpisodes (library-wide)', options,
+            ['UserId', 'userId', 'Limit', 'limit', 'StartIndex', 'startIndex', 'Fields',
+                'EnableRewatching', 'EnableResumable', 'SortBy', 'SortOrder', 'IsMissing', 'IsVirtualUnaired']);
+        var userId = options.UserId === undefined ? options.userId : options.UserId;
+        if (typeof userId !== 'string') throw new Error('Unmodeled UserId: the library-wide Next Up call must name a user');
+        var limit = options.Limit === undefined ? options.limit : options.Limit;
+        var startIndex = options.StartIndex === undefined ? options.startIndex : options.StartIndex;
+        if (limit !== undefined && (typeof limit !== 'number' || limit < 0 || limit % 1 !== 0)) throw new Error('Unmodeled Limit');
+        if (startIndex !== undefined && (typeof startIndex !== 'number' || startIndex < 0 || startIndex % 1 !== 0)) throw new Error('Unmodeled StartIndex');
+        if (options.EnableRewatching !== undefined && typeof options.EnableRewatching !== 'boolean') throw new Error('Unmodeled EnableRewatching');
+        if (options.EnableResumable !== undefined && typeof options.EnableResumable !== 'boolean') throw new Error('Unmodeled EnableResumable');
+        // Validated, then ignored -- see the note above.
+        if (options.SortBy !== undefined && ITEM_SORTS.indexOf(options.SortBy) === -1) throw new Error('Unmodeled SortBy');
+        if (options.SortOrder !== undefined && options.SortOrder !== 'Ascending' && options.SortOrder !== 'Descending') throw new Error('Unmodeled SortOrder');
+        if (options.IsMissing !== undefined && typeof options.IsMissing !== 'boolean') throw new Error('Unmodeled IsMissing');
+        if (options.IsVirtualUnaired !== undefined && typeof options.IsVirtualUnaired !== 'boolean') throw new Error('Unmodeled IsVirtualUnaired');
+
+        var table = options.EnableRewatching === true ? NEXT_UP_LIBRARY_REWATCHING : NEXT_UP_LIBRARY;
+        var selected = (table[userId] || []).map(function (itemId) {
+            return EPISODES.filter(function (episode) { return episode.Id === itemId; })[0];
+        }).filter(Boolean);
+        // Applied BEFORE the count, because MEASURED, TotalRecordCount tracks
+        // the suppression (15 -> 8). Omitting the parameter leaves the
+        // baseline list intact, duplication and all -- which is what makes an
+        // implementation that forgets it observably wrong rather than merely
+        // unvalidated.
+        if (options.EnableResumable === false) selected = selected.filter(function (episode) {
+            var data = (USER_DATA[userId] && USER_DATA[userId][episode.Id]) || {};
+            return !data.PlaybackPositionTicks;
+        });
+        // MEASURED: TotalRecordCount survives Limit and reports the TRUE
+        // pre-limit count (15, not 8).
+        var total = selected.length;
+        var start = typeof startIndex === 'number' ? startIndex : 0;
+        var page = typeof limit === 'number' ? selected.slice(start, start + limit) : selected.slice(start);
+        return Promise.resolve({ Items: page.map(function (episode) {
+            return projectShowFields(withUserData(episode, userId), options.Fields);
+        }), TotalRecordCount: total });
     }
 
     var currentUserId = null;
@@ -466,13 +673,23 @@
             var page = typeof limit === 'number' ? sorted.slice(start, start + limit) : sorted.slice(start);
             return Promise.resolve({ Items: page.map(projectListFields), TotalRecordCount: sorted.length });
         },
+        // Two calls behind one method, exactly as the real client has: with a
+        // SeriesId this is the per-series answer PR #33 modelled; without one
+        // it is the LIBRARY-WIDE /Shows/NextUp call Home's Next Up row makes.
         // Source-confirmed TRANSPORT semantics around a canned server answer;
-        // see NEXT_UP above. This does not guess how the server selects it.
+        // see NEXT_UP / NEXT_UP_LIBRARY above. Neither branch guesses how the
+        // server selects.
         getNextUpEpisodes: function (options) {
             options = options || {};
+            var seriesId = options.SeriesId === undefined ? options.seriesId : options.SeriesId;
+            // The library-wide call is the one with no series scope at all.
+            // Any other SeriesId -- a number, null, an object -- is still the
+            // per-series call made wrongly, and still throws below.
+            if (seriesId === undefined && options.SeriesId === undefined && options.seriesId === undefined) {
+                return nextUpLibraryWide(options);
+            }
             validateShowOptions('getNextUpEpisodes', options,
                 ['UserId', 'userId', 'SeriesId', 'seriesId', 'Limit', 'limit', 'Fields', 'EnableRewatching']);
-            var seriesId = options.SeriesId === undefined ? options.seriesId : options.SeriesId;
             var userId = options.UserId || options.userId || currentUserId;
             var limit = options.Limit === undefined ? options.limit : options.Limit;
             if (typeof seriesId !== 'string') throw new Error('Unmodeled SeriesId');

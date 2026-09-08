@@ -27,6 +27,15 @@ async function emptyLibrary(page) {
                 const getItems = value.getItems.bind(value);
                 value.getItems = (userId, options) =>
                     getItems(userId, options).then((result) => ({ ...result, Items: [] }));
+                // Home's Next Up row does not go through getItems, so an
+                // empty library has to empty /Shows/NextUp as well. Alice's
+                // row happens to be empty already (her only candidate is
+                // resumable, and the row suppresses those), so this is
+                // belt-and-braces today -- but "the library is empty" must
+                // not depend on which profile or which fixture data.
+                const getNextUpEpisodes = value.getNextUpEpisodes.bind(value);
+                value.getNextUpEpisodes = (options) =>
+                    getNextUpEpisodes(options).then((result) => ({ ...result, Items: [], TotalRecordCount: 0 }));
             },
         });
     });

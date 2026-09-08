@@ -206,11 +206,13 @@
     // an earlier revision of this comment said nothing passed 'series' yet,
     // and named S4 as the caller that would.
     //
-    //   'browse'  -- Home's Continue Watching row. It is the only list query
-    //                in the app that returns Episodes at all ('Movie,Episode',
-    //                screens/home.js); Library and Search both query
-    //                'Movie,Series' and so render no episode cards, which
-    //                means they never reach the Episode branch below.
+    //   'browse'  -- Home's Continue Watching row ('Movie,Episode') and its
+    //                Next Up row (the library-wide /Shows/NextUp call, which
+    //                returns nothing BUT Episodes -- MEASURED, every item was
+    //                Type 'Episode'), both in screens/home.js. Library and
+    //                Search query 'Movie,Series' and so render no episode
+    //                cards, which means they never reach the Episode branch
+    //                below.
     //   'series'  -- the Series browse screen's episode grid
     //                (screens/series.js).
     function cardText(item, context) {

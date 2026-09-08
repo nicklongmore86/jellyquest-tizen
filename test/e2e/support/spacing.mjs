@@ -17,11 +17,16 @@ export async function assertSiblingSpacing(page, selector, axis, expectedContain
     ));
     assert.ok(groups.length > 0, `${selector}: expected a rendered container`);
     assert.equal(groups.length, expectedContainers, `${selector}: expected fixture container count`);
-    let pairs = 0;
     for (const [group, rects] of groups.entries()) {
         for (const rect of rects) {
             assert.ok(rect.width > 0 && rect.height > 0, `${selector}: children must have visible geometry`);
         }
+        // PER CONTAINER, not across all of them collectively. The aggregate
+        // form let a container with a single child ride on its siblings'
+        // pairs: zero sibling margin could be injected into that one row and
+        // this helper would still pass, while on both household sets zero
+        // spacing is exactly what makes the D-pad skip cards.
+        let pairs = 0;
         for (let i = 1; i < rects.length; i++) {
             const separation = axis === 'x'
                 ? rects[i].left - rects[i - 1].right
@@ -30,8 +35,9 @@ export async function assertSiblingSpacing(page, selector, axis, expectedContain
                 `${selector} group ${group}, children ${i - 1}/${i}: ${axis} separation ${separation}px must be positive`);
             pairs++;
         }
+        assert.ok(pairs > 0,
+            `${selector} group ${group}: a container with fewer than two children measures no spacing at all`);
     }
-    assert.ok(pairs > 0, `${selector}: fixture must contain adjacent children`);
 }
 
 export async function assertWrappedSpacing(page, selector) {
