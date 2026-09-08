@@ -2403,7 +2403,7 @@
         return parts;
     }
 
-    // Decision 3: an episode card's PRIMARY text is contextual. On Home you
+    // Decision 3: an episode's PRIMARY text is contextual. On Home you
     // are picking a show, so the show's name leads and the episode's own name
     // drops to the meta line; inside a show's own page the show name is
     // already on screen, so the episode's name leads.
@@ -2472,7 +2472,10 @@
     }
 
     window.JellyQuestCards = {
-        createCard: createCard
+        createCard: createCard,
+        // Detail uses the same browse-context label as the card that opened
+        // it, so episode identity cannot drift into a second convention.
+        textFor: cardText
     };
 })();
 
@@ -3382,11 +3385,10 @@
 })();
 
 /* ---- src/overlay/screens/detail.js ---- */
-// Detail/playback screen for Movie items -- see DETAIL_ACTIONS.md for
-// the full intended behavior across movies/shows/sports. This first pass
-// covers movies only (Resume/Play, Trailer, My List); Series/Sports-specific
-// behavior (seasons, episodes, highlights, chapters) is explicit follow-up
-// work, not silently missing -- see docs/rebuild-plan.md's Phase 3 status.
+// Detail/playback screen for individually playable Movie and Episode items.
+// See DETAIL_ACTIONS.md for the broader intended behavior. Series have their
+// own route seam in series.js; show browsing and Sports-specific behavior
+// remain explicit follow-up work.
 //
 // There's no dedicated "Back" control here: per DETAIL_ACTIONS.md, Left
 // from the first action returns to the persistent rail (shell.js), which
@@ -3455,10 +3457,22 @@
         container.innerHTML = '';
         container.className = 'jq-detail-screen';
 
+        var episodeText = item.Type === 'Episode'
+            ? window.JellyQuestCards.textFor(item, 'browse')
+            : null;
         var heading = document.createElement('h1');
         heading.className = 'jq-detail-title';
-        heading.textContent = item.Name + (item.ProductionYear ? ' (' + item.ProductionYear + ')' : '');
+        heading.textContent = episodeText
+            ? episodeText.title
+            : item.Name + (item.ProductionYear ? ' (' + item.ProductionYear + ')' : '');
         container.appendChild(heading);
+
+        if (episodeText && episodeText.meta) {
+            var episodeContext = document.createElement('p');
+            episodeContext.className = 'jq-detail-context';
+            episodeContext.textContent = episodeText.meta;
+            container.appendChild(episodeContext);
+        }
 
         var actions = document.createElement('div');
         actions.className = 'jq-row jq-detail-actions';
@@ -3723,6 +3737,46 @@
 
     window.JellyQuestDetailScreen = {
         render: renderDetail
+    };
+})();
+
+/* ---- src/overlay/screens/series.js ---- */
+// Dedicated Series route seam. S4 replaces this placeholder with the actual
+// season/episode browser; this module deliberately makes no show API request
+// and exposes no playback action because a Series is not itself playable.
+(function () {
+    'use strict';
+
+    // callbacks: { onBack() }
+    function renderSeries(container, item, callbacks) {
+        container.innerHTML = '';
+        container.className = 'jq-detail-screen jq-series-screen';
+
+        var heading = document.createElement('h1');
+        heading.className = 'jq-detail-title jq-series-title';
+        heading.textContent = item && item.Name ? item.Name : 'Series';
+        container.appendChild(heading);
+
+        // Keep Back immediately below the title. Besides making the only
+        // action prominent, this places it alongside the persistent rail so
+        // ArrowLeft has a visible rail candidate in the focus geometry.
+        var back = document.createElement('button');
+        back.className = 'jq-back-button jq-focusable';
+        back.textContent = '< Back';
+        back.setAttribute('data-jq-autofocus', '');
+        back.addEventListener('click', callbacks.onBack);
+        container.appendChild(back);
+
+        var status = document.createElement('p');
+        status.className = 'jq-detail-error jq-series-status';
+        status.textContent = 'Series browsing is not available yet.';
+        container.appendChild(status);
+
+        window.JellyQuestFocus.focusFirst(container);
+    }
+
+    window.JellyQuestSeriesScreen = {
+        render: renderSeries
     };
 })();
 
@@ -4074,7 +4128,7 @@
 // screens: creates #jellyquest-root (no host markup required -- gulp's
 // injection provides no container div), then switches between the
 // profile picker and the shell, and -- within the shell -- between
-// Home/Search/Library/Detail/Requests. The shell's rail (shell.js) stays
+// Home/Search/Library/Detail/Series/Requests. The shell's rail (shell.js) stays
 // mounted across all of those; only its content area swaps.
 //
 // Also owns the remote's hardware Back button: every screen but Home
@@ -4140,7 +4194,7 @@
         currentBackHandler = confirmExit; // top of the navigation stack: Back offers to quit
         window.JellyQuestRequestsBridge.close();
         window.JellyQuestHomeScreen.render(window.JellyQuestShell.getContent(), {
-            onSelectItem: function (item) { showDetail(item, showHome); },
+            onSelectItem: function (item) { showItem(item, showHome); },
             onSeeAll: function (row) { showLibrary(row, showHome); },
         });
     }
@@ -4149,7 +4203,7 @@
         currentBackHandler = showHome;
         window.JellyQuestRequestsBridge.close();
         window.JellyQuestSearchScreen.render(window.JellyQuestShell.getContent(), {
-            onSelectItem: function (item) { showDetail(item, showSearch); },
+            onSelectItem: function (item) { showItem(item, showSearch); },
         });
     }
 
@@ -4157,7 +4211,7 @@
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
         window.JellyQuestLibraryScreen.render(window.JellyQuestShell.getContent(), row, {
-            onSelectItem: function (item) { showDetail(item, function () { showLibrary(row, returnTo); }); },
+            onSelectItem: function (item) { showItem(item, function () { showLibrary(row, returnTo); }); },
             onBack: returnTo,
         });
     }
@@ -4275,12 +4329,31 @@
         return copy;
     }
 
+    // Route by media type before applying playability. A Series is a folder
+    // and therefore correctly fails canPlay(), but it is still a supported
+    // navigation target with its own screen seam for S4 to replace.
+    function showItem(item, returnTo) {
+        if (item && item.Type === 'Series') {
+            showSeries(item, returnTo);
+            return;
+        }
+        showDetail(item, returnTo);
+    }
+
+    function showSeries(item, returnTo) {
+        currentBackHandler = returnTo;
+        window.JellyQuestRequestsBridge.close();
+        window.JellyQuestSeriesScreen.render(window.JellyQuestShell.getContent(), item, {
+            onBack: returnTo
+        });
+    }
+
     function showDetail(item, returnTo) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
         var container = window.JellyQuestShell.getContent();
-        // All card entry points share this guard. Series browsing is separate
-        // work; give unsupported items a visible state and a remote-safe exit.
+        // All non-Series card entry points share this guard. Unsupported
+        // items get a visible state and a remote-safe exit.
         if (!canPlay(item, false)) {
             container.innerHTML = '';
             container.className = 'jq-detail-screen';
@@ -4290,7 +4363,7 @@
             container.appendChild(heading);
             var status = document.createElement('p');
             status.className = 'jq-detail-error';
-            status.textContent = item && item.Type === 'Series' ? 'Series browsing is not available yet.' : 'This item is not available for playback.';
+            status.textContent = 'This item is not available for playback.';
             container.appendChild(status);
             var back = document.createElement('button');
             back.className = 'jq-back-button jq-focusable';

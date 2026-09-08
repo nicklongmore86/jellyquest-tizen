@@ -195,7 +195,7 @@
         return parts;
     }
 
-    // Decision 3: an episode card's PRIMARY text is contextual. On Home you
+    // Decision 3: an episode's PRIMARY text is contextual. On Home you
     // are picking a show, so the show's name leads and the episode's own name
     // drops to the meta line; inside a show's own page the show name is
     // already on screen, so the episode's name leads.
@@ -264,6 +264,9 @@
     }
 
     window.JellyQuestCards = {
-        createCard: createCard
+        createCard: createCard,
+        // Detail uses the same browse-context label as the card that opened
+        // it, so episode identity cannot drift into a second convention.
+        textFor: cardText
     };
 })();

@@ -594,6 +594,7 @@ html, body {
 }
 
 .jq-detail-title,
+.jq-detail-context,
 .jq-detail-actions,
 .jq-detail-error {
     flex: 0 0 auto;
@@ -602,6 +603,12 @@ html, body {
 .jq-detail-title {
     font-size: 36px;
     margin: 0 0 16px;
+}
+
+.jq-detail-context {
+    color: #cfd2d6;
+    font-size: 22px;
+    margin: 0 0 24px;
 }
 
 /* The one child that gives -- see .jq-detail-screen above. */
