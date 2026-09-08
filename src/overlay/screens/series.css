@@ -1,0 +1,100 @@
+/* Series browse screen -- see src/overlay/screens/series.js. */
+
+/* `overflow: hidden` makes this a scrollport focus.js's revealFocus() can
+   scroll programmatically as the cursor walks down the episode grid. Without
+   it the rows past the screen edge are unreachable by remote, because the
+   polyfill will not move focus to an element it cannot see. Deliberately
+   `hidden`, not `auto` -- the TV has no pointer and the polyfill's own
+   isScrollable() excludes `hidden` on purpose. Same shape as
+   .jq-library-screen. */
+.jq-series-screen {
+    padding: 48px;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.jq-series-title {
+    font-size: 36px;
+    margin: 0 0 12px;
+}
+
+.jq-series-controls {
+    margin: 16px 0 20px;
+}
+
+/* No control until the season list lands, and a show with no seasons at all
+   (MEASURED: the household's NHL series) never gets one -- so an empty
+   wrapper must not leave 36px of dead space above the message. */
+.jq-series-controls:empty {
+    display: none;
+}
+
+.jq-series-season-button {
+    background: #262b32;
+    border: none;
+    color: #f2f2f2;
+    font-size: 18px;
+    padding: 14px 24px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.jq-series-episodes {
+    /* Legacy alias, required: unprefixed `gap` in grid context needs M66 and
+       measures 0px on the 2019 / M63 set, while `grid-gap` measures 20px on
+       both. This is a spelling compatibility requirement and is NOT the flex
+       case -- flex gap produces no spacing on either television. See
+       src/overlay/screens/library.css and the convention in focus.css. */
+    grid-gap: 20px;
+}
+
+.jq-series-status {
+    color: #9aa0a8;
+    font-size: 22px;
+    margin: 0 0 20px;
+}
+
+.jq-series-status-error {
+    color: #ff6b6b;
+}
+
+/* The `hidden` attribute needs reasserting wherever an author rule sets
+   `display` on the same element -- author styles beat the UA stylesheet's
+   [hidden] rule regardless of specificity (found the hard way in Phase 1).
+   Nothing here sets `display` on .jq-series-status today, so this is
+   belt-and-braces rather than load-bearing. */
+.jq-series-status[hidden] {
+    display: none;
+}
+
+/* The dropdown itself. `overflow: hidden` again rather than auto: the
+   measured deepest show has 13 seasons, which fits, but a longer list has to
+   stay walkable, and focus.js scrolls this container the same way it scrolls
+   a row. */
+.jq-series-season-menu {
+    background: #1c1f24;
+    border-radius: 10px;
+    padding: 32px;
+    width: 420px;
+    max-height: 720px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Sibling margins, not flex `gap` -- see the spacing convention in focus.css. */
+.jq-series-season-menu > * + * {
+    margin-top: 12px;
+}
+
+.jq-series-season-menu h2 {
+    margin: 0;
+    font-size: 22px;
+}
+
+/* The season the episode list is currently showing. Colour alone, no glyph:
+   the focus ring is the cursor and a second marker competing with it reads
+   as two cursors on a television. */
+.jq-series-season-option[aria-current="true"] {
+    background: #33393f;
+}

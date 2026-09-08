@@ -55,6 +55,7 @@ const CSS_FILES = [
     path.join(root, 'src/overlay/screens/library.css'),
     path.join(root, 'src/overlay/screens/search.css'),
     path.join(root, 'src/overlay/screens/detail.css'),
+    path.join(root, 'src/overlay/screens/series.css'),
     path.join(root, 'src/overlay/screens/requests.css'),
 ];
 

@@ -214,11 +214,28 @@
         showDetail(item, returnTo);
     }
 
-    function showSeries(item, returnTo) {
+    // `seasonId` is what the viewer was last looking at inside this show.
+    // Coming back from an episode's Detail page has to land on that season
+    // again -- returning to season 1 after browsing season 5 is a worse exit
+    // than the S3 seam's, which had no state to lose. The screen reports each
+    // change through onSeasonChange, and the local `state` object is what
+    // carries it into the return closure below.
+    function showSeries(item, returnTo, seasonId) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
+        var state = { seasonId: seasonId || null };
         window.JellyQuestSeriesScreen.render(window.JellyQuestShell.getContent(), item, {
-            onBack: returnTo
+            onBack: returnTo,
+            initialSeasonId: state.seasonId,
+            onSeasonChange: function (changedTo) { state.seasonId = changedTo; },
+            // An episode opens its Detail page rather than playing outright
+            // (household decision 5): instant play would save one press and
+            // lose Start Over, My List and any future track choice. Episode
+            // routing and playback already work -- showItem() sends a
+            // non-Series item to showDetail().
+            onSelectItem: function (episode) {
+                showItem(episode, function () { showSeries(item, returnTo, state.seasonId); });
+            }
         });
     }
 

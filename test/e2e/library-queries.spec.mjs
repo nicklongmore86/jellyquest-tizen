@@ -382,7 +382,11 @@ test('Home row order and initial focus survive Recently Added resolving first', 
     assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), 'movie-1');
 }));
 
-for (const [type, isFolder, message] of [['Series', true, 'Series browsing is not available yet.'], ['CollectionFolder', true, 'This item is not available for playback.'], ['Audio', false, 'This item is not available for playback.'], ['Movie', true, 'This item is not available for playback.']]) {
+// Series left this table when S4 replaced the inert seam: a Series is a real
+// navigation target with its own screen now, not an unsupported item, so it
+// gets the dedicated test below rather than a row here. The property being
+// checked is the same one in both places.
+for (const [type, isFolder, message] of [['CollectionFolder', true, 'This item is not available for playback.'], ['Audio', false, 'This item is not available for playback.'], ['Movie', true, 'This item is not available for playback.']]) {
     test(`${type} (IsFolder=${isFolder}) activation has visible explanation, Back, and no playback actions`, async () => withPage(async page => {
         await page.evaluate(({ type, isFolder }) => {
             window.__playCalls = 0;
@@ -403,6 +407,33 @@ for (const [type, isFolder, message] of [['Series', true, 'Series browsing is no
         assert.equal(await page.evaluate(() => window.__playCalls), 0);
     }));
 }
+
+// The Series counterpart of the table above: same property -- a visible
+// explanation, a painted Back, no playback action and no play() call -- on
+// the screen a Series now routes to. This item's id is unknown to the show
+// endpoints, and the stub rejects an unknown series id by THROWING
+// SYNCHRONOUSLY, so this also pins that a synchronous client failure reaches
+// the screen as a message rather than leaving it on 'Loading seasons…'.
+test('Series activation has a visible explanation, Back, and no playback actions', async () => withPage(async page => {
+    await page.evaluate(() => {
+        window.__playCalls = 0;
+        window.playbackManager.play = () => { window.__playCalls++; };
+        window.ApiClient.getItems = () => Promise.resolve({ Items: [{ Id: 'unsupported', Type: 'Series', IsFolder: true, Name: 'Unsupported example', ServerId: 'dev-server-1' }] });
+    });
+    await signIn(page);
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.jq-series-screen');
+    await page.waitForFunction(() => document.querySelector('.jq-series-status')?.textContent
+        === 'Couldn\u2019t load this show\u2019s seasons. Try again.');
+    assert.equal(await page.locator('.jq-series-status').isVisible(), true);
+    await assertPainted(page.locator('.jq-series-status'));
+    await assertPainted(page.locator('.jq-back-button'));
+    assert.equal(await page.locator('.jq-detail-action').count(), 0);
+    assert.equal(await page.locator('.jq-back-button').evaluate(button => button === document.activeElement), true);
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.jq-home-row-heading');
+    assert.equal(await page.evaluate(() => window.__playCalls), 0);
+}));
 
 test('a resumable Episode enters the existing playback path with its server and saved position', async () => withPage(async page => {
     await signIn(page);
