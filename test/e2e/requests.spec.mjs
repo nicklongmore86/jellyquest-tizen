@@ -459,6 +459,35 @@ async function openShellAs(page, profileName) {
     await page.waitForSelector('.jq-media-card'); // let Home settle, so nothing else moves focus later
 }
 
+// Holds the initial configuration response open until release(). This is the
+// gap under test: an immediate route response cannot interleave a remote key
+// press between showRequests() and its configuration continuation.
+async function deferConfiguration(page, response) {
+    let markStarted;
+    let releaseRequest;
+    let markFinished;
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    const held = new Promise((resolve) => { releaseRequest = resolve; });
+    const finished = new Promise((resolve) => { markFinished = resolve; });
+    await page.route('**/jellyquest-build.json', async (route) => {
+        markStarted();
+        await held;
+        await route.fulfill({
+            status: response.status,
+            contentType: 'application/json',
+            body: response.body,
+        });
+        markFinished();
+    });
+    return {
+        waitForRequest: () => started,
+        release: async () => {
+            releaseRequest();
+            await finished;
+        },
+    };
+}
+
 // Holds the named bridge method open until releaseBridge(). `outcome`
 // 'reject' fails it instead, for the error path.
 async function deferBridge(page, method, outcome) {
@@ -497,6 +526,100 @@ function activeClass(page) {
         const active = document.activeElement;
         const names = ['jq-nav-home', 'jq-nav-search', 'jq-nav-requests', 'jq-profile-switch', 'jq-requests-input', 'jq-requests-retry'];
         return names.find((name) => active.classList.contains(name)) || active.className || active.tagName;
+    });
+}
+
+// ---- Configuration-wait focus steals (the sixth of this class) ---------
+
+for (const outcome of ['success', 'HTTP 500']) {
+    test(`a delayed Requests configuration ${outcome} preserves a newer Home selection`, async () => {
+        const browser = await chromium.launch();
+        try {
+            const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+            const configuration = await deferConfiguration(page, {
+                status: outcome === 'success' ? 200 : 500,
+                body: outcome === 'success'
+                    ? JSON.stringify({ requestsBridgeUrl: `${server.baseUrl}/dev/fixtures/requests-bridge.html` })
+                    : '{}',
+            });
+            await openShellAs(page, 'Alice');
+            await configuration.waitForRequest();
+            await page.locator('.jq-nav-requests').click();
+            await page.getByText('Loading Requests configuration…', { exact: true }).waitFor();
+
+            await page.keyboard.press('ArrowUp'); // Requests -> Search
+            await page.keyboard.press('ArrowUp'); // Search   -> Home
+            assert.equal(await activeClass(page), 'jq-nav-home');
+            await configuration.release();
+
+            if (outcome === 'success') await page.waitForSelector('.jq-requests-input');
+            else await page.getByRole('button', { name: 'Retry', exact: true }).waitFor();
+            assert.equal(await activeClass(page), 'jq-nav-home',
+                `a late configuration ${outcome} must not override the newer Home selection`);
+            await assertPainted(page.locator(':focus'));
+        } finally {
+            await browser.close();
+        }
+    });
+}
+
+for (const scenario of [
+    'configuration succeeds',
+    'HTTP 500 then Retry succeeds',
+    'HTTP 500 then Retry bridge fails',
+    'eligibility is denied',
+    'Requests are not configured',
+]) {
+    test(`a delayed Requests ${scenario} keeps ordinary focus placement`, async () => {
+        const browser = await chromium.launch();
+        try {
+            const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+            const failsInitially = scenario.startsWith('HTTP 500');
+            const configuration = await deferConfiguration(page, {
+                status: failsInitially ? 500 : 200,
+                body: scenario === 'Requests are not configured'
+                    ? '{}'
+                    : JSON.stringify({ requestsBridgeUrl: `${server.baseUrl}/dev/fixtures/requests-bridge.html` }),
+            });
+            await openShellAs(page, scenario === 'eligibility is denied' ? 'Charlie' : 'Alice');
+            await configuration.waitForRequest();
+            await page.locator('.jq-nav-requests').click();
+            assert.equal(await activeClass(page), 'jq-nav-requests');
+            await configuration.release();
+
+            if (failsInitially) {
+                const retry = page.getByRole('button', { name: 'Retry', exact: true });
+                await retry.waitFor();
+                assert.equal(await activeClass(page), 'jq-requests-retry',
+                    'a configuration failure must autofocus Retry when the user has not moved');
+                await page.unroute('**/jellyquest-build.json');
+                if (scenario === 'HTTP 500 then Retry bridge fails') {
+                    await page.evaluate(() => {
+                        window.JellyQuestRequestsBridge.openSession = () => Promise.reject(new Error('Requests bridge offline'));
+                    });
+                }
+                await page.keyboard.press('Enter');
+            }
+
+            if (scenario === 'configuration succeeds' || scenario === 'HTTP 500 then Retry succeeds') {
+                await page.waitForSelector('.jq-requests-input');
+                assert.equal(await activeClass(page), 'jq-requests-input',
+                    'an ordinary successful render must autofocus the Requests search input');
+            } else if (scenario === 'HTTP 500 then Retry bridge fails') {
+                await page.getByText('Requests are unavailable right now.', { exact: true }).waitFor();
+                assert.equal(await activeClass(page), 'jq-profile-switch',
+                    'a Retry bridge failure must leave visible focus on the rail fallback');
+            } else if (scenario === 'eligibility is denied') {
+                await page.getByText('Requests are not available for this profile.', { exact: true }).waitFor();
+                assert.equal(await activeClass(page), 'jq-nav-requests');
+            } else {
+                await page.getByText('Requests are not configured for this server.', { exact: true }).waitFor();
+                assert.equal(await activeClass(page), 'jq-nav-requests');
+            }
+            await assertPainted(page.locator(':focus'));
+        } finally {
+            await browser.close();
+        }
     });
 }
 
