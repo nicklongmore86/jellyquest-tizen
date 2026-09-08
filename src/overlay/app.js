@@ -277,12 +277,18 @@
         loading.className = 'jq-requests-status';
         loading.textContent = 'Loading Requests configuration…';
         container.appendChild(loading);
+        // Clearing a focused Retry button leaves focus on <body>. Finish this
+        // render's synchronous focus placement before recording the element
+        // that must still hold focus when configuration loading completes.
+        window.JellyQuestFocus.focusFirst(container);
+        var focusAtRequest = document.activeElement;
         var ready = buildConfig ? Promise.resolve() : loadConfiguration();
         ready.then(function () {
             if (loading.parentNode !== container) return; // navigated away while loading
             window.JellyQuestRequestsScreen.render(container, {
                 bridgeUrl: buildConfig && buildConfig.requestsBridgeUrl,
                 configurationFailed: !buildConfig,
+                focusAtRequest: focusAtRequest,
                 onRetryConfiguration: showRequests,
                 userId: user.Id,
                 userName: user.Name

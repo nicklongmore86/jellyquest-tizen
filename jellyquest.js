@@ -3653,7 +3653,8 @@
     var STATUS_REQUESTED = [2, 3];
     var STATUS_AVAILABLE = [4, 5];
 
-    // config: { bridgeUrl, userId, userName, configurationFailed, onRetryConfiguration }
+    // config: { bridgeUrl, userId, userName, configurationFailed,
+    // focusAtRequest, onRetryConfiguration }
     function renderRequests(container, config) {
         container.innerHTML = '';
         container.className = 'jq-requests-screen';
@@ -3661,7 +3662,7 @@
         var status = document.createElement('p');
         status.className = 'jq-requests-status';
         container.appendChild(status);
-        window.JellyQuestFocus.focusFirst(container);
+        window.JellyQuestFocus.focusFirst(container, config.focusAtRequest);
 
         if (config.configurationFailed) {
             status.textContent = 'Could not load Requests configuration. Try again.';
@@ -3670,7 +3671,7 @@
             retry.textContent = 'Retry';
             retry.addEventListener('click', config.onRetryConfiguration);
             container.appendChild(retry);
-            window.JellyQuestFocus.focusFirst(container);
+            window.JellyQuestFocus.focusFirst(container, config.focusAtRequest);
             return;
         }
 
@@ -3683,7 +3684,8 @@
         status.textContent = 'Checking Requests for this profile…';
 
         // What focusFirst()'s guard (focus.js) compares against when
-        // renderSearch's focus call lands, two bridge round trips from now.
+        // renderSearch's focus call lands, two bridge round trips from now,
+        // was captured by app.js before configuration loading began.
         //
         // The comparison is element IDENTITY, not causation: if a DIFFERENT
         // visible element holds focus by then, this render's autofocus is
@@ -3692,24 +3694,11 @@
         // it is indistinguishable from focus that never moved, and an
         // application-driven move (a modal opening, a navigation elsewhere)
         // reads exactly like a remote key press. Those are limitations of
-        // the shared guard, not of this line, and they are worth what they
-        // cost here; nothing in this file can strengthen them.
-        //
-        // What this line does establish is the other half of the comparison:
-        // that no focus placement of THIS render's own doing falls between
-        // the capture and the check. It is taken after every synchronous
-        // focus placement the render performs and immediately before the
-        // first bridge call, and no path from here to renderSearch places
-        // focus in between. Taking it at the top of the function instead
-        // recorded a state the render then changed itself. Arriving from
-        // Retry, the pressed button is already gone -- app.js's
-        // showRequests() empties `container` before this function is ever
-        // entered -- so document.activeElement is <body> at entry, and the
-        // focusFirst() a few lines up finds nothing focusable in the
-        // half-built screen and takes focus.js's rail fallback. Captured
-        // before that ran, the fallback itself compared as a change, and a
-        // successful Retry never focused its search box.
-        var focusAtRequest = document.activeElement;
+        // the shared guard, not of this value, and they are worth what they
+        // cost here; nothing in this file can strengthen them. Keeping the
+        // outer value also means a rail move during configuration loading is
+        // not erased when this downstream render begins.
+        var focusAtRequest = config.focusAtRequest;
 
         bridge.checkEligibility(config.bridgeUrl, config.userId, config.userName).then(function (eligible) {
             if (!eligible) {
@@ -4262,12 +4251,18 @@
         loading.className = 'jq-requests-status';
         loading.textContent = 'Loading Requests configuration…';
         container.appendChild(loading);
+        // Clearing a focused Retry button leaves focus on <body>. Finish this
+        // render's synchronous focus placement before recording the element
+        // that must still hold focus when configuration loading completes.
+        window.JellyQuestFocus.focusFirst(container);
+        var focusAtRequest = document.activeElement;
         var ready = buildConfig ? Promise.resolve() : loadConfiguration();
         ready.then(function () {
             if (loading.parentNode !== container) return; // navigated away while loading
             window.JellyQuestRequestsScreen.render(container, {
                 bridgeUrl: buildConfig && buildConfig.requestsBridgeUrl,
                 configurationFailed: !buildConfig,
+                focusAtRequest: focusAtRequest,
                 onRetryConfiguration: showRequests,
                 userId: user.Id,
                 userName: user.Name
