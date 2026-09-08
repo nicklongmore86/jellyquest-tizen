@@ -67,11 +67,13 @@
             // REJECTED ALTERNATIVE -- deduplicating against Continue
             // Watching's ids here in the client. MEASURED, it yields the same
             // survivors, so it buys nothing; it offers no extra cards to
-            // replace what it drops; it would couple this row to another
-            // row's results and to whichever resolves first; and it filters
-            // AFTER Limit, so a page of eight could arrive mostly duplicated
-            // and render two cards. The server does the same job before the
-            // limit is applied.
+            // replace what it drops; and it filters AFTER Limit, so a page of
+            // eight could arrive mostly duplicated and render two cards. The
+            // server does the same job before the limit is applied. (It would
+            // NOT have to depend on which row resolves first, as an earlier
+            // revision of this comment claimed -- dedupe after the Promise.all
+            // below has both results. That reason was wrong; the three above
+            // are the reasons.)
             //
             // Deliberately NOT sent:
             //   SortBy/SortOrder     MEASURED accepted and SILENTLY IGNORED
@@ -94,14 +96,21 @@
             //
             // Limit: 8 matches Recently Added below rather than upstream's 15
             // (nextUp.ts:24). MEASURED cost on the household's largest
-            // profile: 15 items / 26,195 bytes unbounded against 8 items /
-            // 14,143 bytes at Limit 8. The row is a horizontally scrolled
-            // rail, so eight cards is already more than one screen, and the
-            // measured worst case hides at most seven items. ACCEPTED
-            // LIMITATION: there is no "See All" to reach those seven --
-            // the Library screen is a getItems screen and cannot express
-            // /Shows/NextUp, and building a Next Up library is out of this
-            // task's scope.
+            // profile: 15 items / 26,195 bytes for the unbounded BASELINE
+            // against 8 items / 14,143 bytes at Limit 8.
+            //
+            // In the measured state this Limit now hides NOTHING, because the
+            // suppression above lands first: MEASURED, the largest profile is
+            // left with exactly 8 survivors and the restricted one with 1, so
+            // the cap is reached but never exceeded. It still bounds a
+            // profile that later accumulates more shows in progress than fit
+            // one screen, and the row is a horizontally scrolled rail, so
+            // eight cards is already more than one screen.
+            //
+            // ACCEPTED LIMITATION, if that ever happens: there is no
+            // "See All" to reach past the cap -- the Library screen is a
+            // getItems screen and cannot express /Shows/NextUp, and building
+            // a Next Up library is out of this task's scope.
             {
                 title: 'Next Up',
                 fetch: function () {

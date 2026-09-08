@@ -433,10 +433,16 @@ test('a failing Next Up degrades to a visible message and leaves the other rows 
         window.ApiClient.getNextUpEpisodes = () => Promise.reject(new Error('next up is down'));
     });
     await signIn(page, 'user-dana');
+    // signIn waits for a heading, and Promise.all gates all three rows, so by
+    // the time ANY heading exists this render is finished -- including the
+    // failed row's message. Everything below is therefore a non-waiting read:
+    // a missing message must fail as an assertion, not as a five-second
+    // textContent() timeout.
     assert.deepEqual(await headings(page), ['Continue Watching', 'Recently Added']);
-    const message = page.locator('.jq-home-empty');
-    assert.equal(await message.textContent(), 'Next Up is unavailable right now.');
-    await assertPainted(message);
+    assert.deepEqual(
+        await page.evaluate(() => Array.from(document.querySelectorAll('.jq-home-empty'), (p) => p.textContent)),
+        ['Next Up is unavailable right now.']);
+    await assertPainted(page.locator('.jq-home-empty'));
     assert.deepEqual(await rowIds(page, 'Continue Watching'), ['movie-6', 'episode-523']);
     assert.ok((await rowIds(page, 'Recently Added')).length > 0);
 }));

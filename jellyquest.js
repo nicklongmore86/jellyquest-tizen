@@ -2017,17 +2017,58 @@
     // Ahead of the cursor, rule 2 needs a point one tenth into the neighbour,
     // so what matters there is its SIZE.
     //
-    // Only runs for a container that actually scrolls, so the walk is over
-    // one screen's cards at a time, once per key press, with no writes
-    // interleaved to force a reflow mid-loop.
+    // WHAT THIS COSTS, measured rather than assumed. It runs only for a
+    // container that actually scrolls, but that is not once per key press:
+    // one Home key press invokes it up to THREE times, because three
+    // ancestors of a card scroll -- the row on X, the row's section on X,
+    // and the Home screen on Y. Each walk covers the container's MOUNTED
+    // candidates, which is not the same as what is on screen: the Library's
+    // windowed grid mounts 48 cards plus the Back button, so its walk visits
+    // 49, and that 48-card window spans considerably more than the viewport.
+    //
+    // Measured at 1920x1080 under a 20x CPU throttle, keydown handling only,
+    // the walks add ~0.75ms per Library key press (4.0 p95, 5.0 max) and
+    // move the whole handler's median from 35.3ms to 36.2ms. They do not add
+    // a second hitTest-sized sweep. Those are desktop-under-throttle
+    // numbers; the M63 television was not measured.
+    //
+    // No writes are interleaved, so the loop runs against one settled layout.
+    // `visibility: hidden` keeps an element's box, so a geometry-only scan
+    // cannot tell such an element apart from a real one -- but it is not
+    // focusable and elementFromPoint() never returns it, so hitTest() would
+    // never pick it. Left in the running it can win the "nearest behind"
+    // contest on a box the cursor can never reach, and drag the reveal with
+    // it.
+    //
+    // Two passes, because the cost rule is that a style read must not be paid
+    // per candidate: the first pass reads no styles at all, and only if the
+    // element it CHOSE turns out to be hidden is a filtering pass run. In the
+    // overlay as it stands that second pass never runs -- nothing focusable
+    // uses `visibility: hidden` (the card images do, and they are not
+    // candidates) -- so the standing cost is two style reads per axis.
+    //
+    // It skips hidden candidates rather than giving up on the side: an
+    // earlier attempt here fell back to "no neighbour" instead, which is a
+    // coin flip. MEASURED on a synthetic 400px scrollport with a tall hidden
+    // predecessor, falling back left the next real candidate at top = -136,
+    // outside the port, where skipping puts it at 0 and inside.
     function neighbours(container, element, horizontal) {
+        var candidates = container.querySelectorAll('.jq-focusable');
+        var found = scanNeighbours(candidates, element, horizontal, false);
+        if ((found.leadNode && isHidden(found.leadNode))
+            || (found.trailNode && isHidden(found.trailNode))) {
+            found = scanNeighbours(candidates, element, horizontal, true);
+        }
+        return found;
+    }
+
+    function scanNeighbours(candidates, element, horizontal, skipHidden) {
         var rect = element.getBoundingClientRect();
         var start = horizontal ? rect.left : rect.top;
         var end = horizontal ? rect.right : rect.bottom;
-        var found = { leadDistance: null, trailSize: null };
+        var found = { leadDistance: null, trailSize: null, leadNode: null, trailNode: null };
         var leadEdge = null;
         var trailEdge = null;
-        var candidates = container.querySelectorAll('.jq-focusable');
         for (var i = 0; i < candidates.length; i++) {
             var other = candidates[i];
             if (other === element) continue;
@@ -2036,21 +2077,30 @@
             // and its all-zero rect would otherwise read as sitting at the
             // very start of the axis.
             if (!box.width && !box.height) continue;
+            if (skipHidden && isHidden(other)) continue;
             var otherStart = horizontal ? box.left : box.top;
             var otherEnd = horizontal ? box.right : box.bottom;
             if (otherEnd <= start) {
                 if (leadEdge === null || otherEnd > leadEdge) {
                     leadEdge = otherEnd;
+                    found.leadNode = other;
                     found.leadDistance = start - otherStart;
                 }
             } else if (otherStart >= end) {
                 if (trailEdge === null || otherStart < trailEdge) {
                     trailEdge = otherStart;
+                    found.trailNode = other;
                     found.trailSize = horizontal ? box.width : box.height;
                 }
             }
         }
         return found;
+    }
+
+    function isHidden(node) {
+        var view = node.ownerDocument && node.ownerDocument.defaultView;
+        if (!view || typeof view.getComputedStyle !== 'function') return false;
+        return view.getComputedStyle(node).visibility === 'hidden';
     }
 
     // How much room to keep on each side of an element of `size` along one
@@ -2063,18 +2113,23 @@
     // that "rows and grids here are uniform" -- and that premise died when
     // Home grew a third row. Home stacks a 204px episode row between two
     // 410px poster rows, separated by 76px of heading and section margin, so
-    // walking DOWN the stack and back UP left the poster row above spanning
-    // y = -176 upward. A lead computed as 204 + 64 cannot reveal a neighbour
-    // that starts 486px back, and hitTest() rejects a candidate whose top is
+    // walking DOWN the stack and back UP left the poster row above at
+    // top = -176. A lead computed as 204 + 64 cannot reveal a neighbour that
+    // starts 486px back, and hitTest() rejects a candidate whose top is
     // negative before it looks at how much of it is on screen -- so focus
     // left the screen for the rail instead of returning to Continue Watching.
     //
-    // A uniform stack measures its own geometry back, so nothing else in the
-    // overlay changes shape: `lead` becomes size + spacing + GAP_PX where it
-    // was size + GAP_PX (20px more reveal inside a row, the spacing that was
-    // always there), and `trail` is unchanged wherever the neighbour ahead is
-    // the same size. `size` remains the fallback for an element with no
-    // candidate on that side.
+    // A uniform container measures its own geometry back, so the SHAPE of
+    // every other traversal is preserved -- but not, and this was overclaimed
+    // once already, the exact pixels. `lead` becomes size + spacing + GAP_PX
+    // where it was size + GAP_PX, so the spacing that was always between two
+    // uniform items is now revealed as well: MEASURED, upward traversal in
+    // the Library and on the Series screen, and Home's horizontal return
+    // traversal, each settle 20px further along than before. Focus
+    // identities and traversal order are unchanged in all of them; what
+    // changed is where the container comes to rest. `trail` is unchanged
+    // wherever the neighbour ahead is the same size. `size` remains the
+    // fallback for an element with no candidate on that side.
     function revealMargin(size, spare, across) {
         var leadDistance = across && across.leadDistance !== null ? across.leadDistance : size;
         var trailSize = across && across.trailSize !== null ? across.trailSize : size;
@@ -2889,11 +2944,13 @@
             // REJECTED ALTERNATIVE -- deduplicating against Continue
             // Watching's ids here in the client. MEASURED, it yields the same
             // survivors, so it buys nothing; it offers no extra cards to
-            // replace what it drops; it would couple this row to another
-            // row's results and to whichever resolves first; and it filters
-            // AFTER Limit, so a page of eight could arrive mostly duplicated
-            // and render two cards. The server does the same job before the
-            // limit is applied.
+            // replace what it drops; and it filters AFTER Limit, so a page of
+            // eight could arrive mostly duplicated and render two cards. The
+            // server does the same job before the limit is applied. (It would
+            // NOT have to depend on which row resolves first, as an earlier
+            // revision of this comment claimed -- dedupe after the Promise.all
+            // below has both results. That reason was wrong; the three above
+            // are the reasons.)
             //
             // Deliberately NOT sent:
             //   SortBy/SortOrder     MEASURED accepted and SILENTLY IGNORED
@@ -2916,14 +2973,21 @@
             //
             // Limit: 8 matches Recently Added below rather than upstream's 15
             // (nextUp.ts:24). MEASURED cost on the household's largest
-            // profile: 15 items / 26,195 bytes unbounded against 8 items /
-            // 14,143 bytes at Limit 8. The row is a horizontally scrolled
-            // rail, so eight cards is already more than one screen, and the
-            // measured worst case hides at most seven items. ACCEPTED
-            // LIMITATION: there is no "See All" to reach those seven --
-            // the Library screen is a getItems screen and cannot express
-            // /Shows/NextUp, and building a Next Up library is out of this
-            // task's scope.
+            // profile: 15 items / 26,195 bytes for the unbounded BASELINE
+            // against 8 items / 14,143 bytes at Limit 8.
+            //
+            // In the measured state this Limit now hides NOTHING, because the
+            // suppression above lands first: MEASURED, the largest profile is
+            // left with exactly 8 survivors and the restricted one with 1, so
+            // the cap is reached but never exceeded. It still bounds a
+            // profile that later accumulates more shows in progress than fit
+            // one screen, and the row is a horizontally scrolled rail, so
+            // eight cards is already more than one screen.
+            //
+            // ACCEPTED LIMITATION, if that ever happens: there is no
+            // "See All" to reach past the cap -- the Library screen is a
+            // getItems screen and cannot express /Shows/NextUp, and building
+            // a Next Up library is out of this task's scope.
             {
                 title: 'Next Up',
                 fetch: function () {
