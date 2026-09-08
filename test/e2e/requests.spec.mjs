@@ -436,3 +436,229 @@ test('Requests surfaces a synchronous renderer throw after configuration loads',
         await browser.close();
     }
 });
+
+// ---- Late-completion focus steals (the fifth of this class) -------------
+//
+// Requests waits on the bridge -- checkEligibility() then openSession(),
+// two network round trips -- while the rail stays mounted and focusable.
+// The fixture bridge is already asynchronous (an iframe load and a
+// postMessage round trip), so the ordering these tests need is reachable
+// in principle without help; what it is not is CONTROLLABLE. Releasing the
+// bridge call explicitly is what makes "a key press lands while the
+// session is open" deterministic rather than a race against however long
+// the fixture iframe happens to take. The cursor is then moved with REAL
+// arrow keys, because a programmatic .focus() would not exercise the
+// polyfill's own path.
+async function openShellAs(page, profileName) {
+    await page.goto(simulatorUrl);
+    await page.waitForSelector('.jq-profile-card');
+    await page.evaluate((name) => {
+        Array.from(document.querySelectorAll('.jq-profile-card')).find((card) => card.textContent === name).click();
+    }, profileName);
+    await page.waitForSelector('.jq-shell');
+    await page.waitForSelector('.jq-media-card'); // let Home settle, so nothing else moves focus later
+}
+
+// Holds the named bridge method open until releaseBridge(). `outcome`
+// 'reject' fails it instead, for the error path.
+async function deferBridge(page, method, outcome) {
+    await page.evaluate(([method, outcome]) => {
+        const real = window.JellyQuestRequestsBridge[method];
+        window.__pendingBridge = [];
+        window.JellyQuestRequestsBridge[method] = function () {
+            const receiver = this;
+            const args = arguments;
+            return new Promise((resolve, reject) => {
+                window.__pendingBridge.push(() => {
+                    if (outcome === 'reject') return reject(new Error('Requests bridge offline'));
+                    real.apply(receiver, args).then(resolve, reject);
+                });
+            });
+        };
+    }, [method, outcome]);
+}
+
+// A real mouse click on the rail item, which focuses it the way pressing
+// Enter on it does -- so the captured "focus at render start" is a rendered,
+// visible rail button, the case that could wrongly suppress the guard.
+async function enterRequestsAndHold(page) {
+    await page.locator('.jq-nav-requests').click();
+    await page.waitForFunction(() => window.__pendingBridge && window.__pendingBridge.length === 1);
+    assert.equal(await activeClass(page), 'jq-nav-requests',
+        'entering Requests must leave focus on the rail item that was activated');
+}
+
+async function releaseBridge(page) {
+    await page.evaluate(() => window.__pendingBridge.splice(0).forEach((release) => release()));
+}
+
+function activeClass(page) {
+    return page.evaluate(() => {
+        const active = document.activeElement;
+        const names = ['jq-nav-home', 'jq-nav-search', 'jq-nav-requests', 'jq-profile-switch', 'jq-requests-input', 'jq-requests-retry'];
+        return names.find((name) => active.classList.contains(name)) || active.className || active.tagName;
+    });
+}
+
+test('a delayed Requests session preserves a newer rendered rail selection', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openShellAs(page, 'Alice');
+        await deferBridge(page, 'openSession');
+        await enterRequestsAndHold(page);
+
+        await page.keyboard.press('ArrowUp'); // Requests -> Search
+        await page.keyboard.press('ArrowUp'); // Search   -> Home
+        assert.equal(await activeClass(page), 'jq-nav-home',
+            'the delayed-session precondition must leave a real selection on Home');
+        await assertPainted(page.locator(':focus'));
+
+        await releaseBridge(page);
+        await page.waitForSelector('.jq-requests-input');
+
+        assert.equal(await activeClass(page), 'jq-nav-home',
+            'a late Requests session must not override the newer Home selection');
+        await assertPainted(page.locator(':focus'));
+    } finally {
+        await browser.close();
+    }
+});
+
+// NON-REGRESSION GUARD -- green before this change and after it. Its job is
+// the other half of the guard: focusFirst()'s expectedFocus check must not
+// suppress ORDINARY autofocus. shell.js focuses the rail before any screen
+// renders, so the element captured at render start is itself a visible,
+// rendered rail button; only the identity clause
+// (document.activeElement !== expectedFocus) keeps hasVisibleFocus() from
+// swallowing the normal case. Delete that clause and this test fails.
+test('a delayed Requests session still autofocuses its search input without newer user input', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openShellAs(page, 'Alice');
+        await deferBridge(page, 'openSession');
+        await enterRequestsAndHold(page);
+
+        await releaseBridge(page);
+        await page.waitForSelector('.jq-requests-input');
+
+        assert.equal(await activeClass(page), 'jq-requests-input',
+            'Requests must keep its ordinary search-input autofocus when focus has not moved');
+        await assertPainted(page.locator(':focus'));
+    } finally {
+        await browser.close();
+    }
+});
+
+// NON-REGRESSION GUARDs -- the two paths that end the render WITHOUT
+// reaching renderSearch(). Neither calls focusFirst() after its await
+// today; these pin that, since a "show a message and also focus something"
+// change to either would reintroduce the same steal.
+for (const path of ['an ineligible profile', 'a session error']) {
+    test(`a delayed Requests render that ends in ${path} leaves a newer rail selection alone`, async () => {
+        const browser = await chromium.launch();
+        try {
+            const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+            const ineligible = path === 'an ineligible profile';
+            await openShellAs(page, ineligible ? 'Charlie' : 'Alice'); // Charlie: not in eligibleUserIds
+            await deferBridge(page, ineligible ? 'checkEligibility' : 'openSession', ineligible ? null : 'reject');
+            await enterRequestsAndHold(page);
+
+            await page.keyboard.press('ArrowUp'); // Requests -> Search
+            assert.equal(await activeClass(page), 'jq-nav-search');
+
+            await releaseBridge(page);
+            const message = page.getByText(ineligible
+                ? 'Requests are not available for this profile.'
+                : 'Requests are unavailable right now.', { exact: true });
+            await message.waitFor({ state: 'visible', timeout: 2000 });
+            await assertPainted(message);
+
+            assert.equal(await activeClass(page), 'jq-nav-search',
+                'a late Requests failure must not override the newer Search selection');
+            await assertPainted(page.locator(':focus'));
+        } finally {
+            await browser.close();
+        }
+    });
+}
+
+// ---- Retry: the same guard must not swallow ORDINARY autofocus ---------
+//
+// Pressing Retry re-enters app.js's showRequests(), which clears the
+// content container -- detaching the Retry button that had focus, so
+// document.activeElement is <body> when renderRequests() begins. The
+// synchronous focusFirst() near the top of that render then finds nothing
+// focusable in the screen yet and falls back to the rail. That is the
+// APPLICATION placing focus during this render, not the user moving it,
+// and it must not read as newer intent when the bridge comes back -- which
+// is why the expectation is captured after that settles rather than at
+// function entry. These three pin all three outcomes of a Retry press.
+async function enterRequestsWithArrows(page) {
+    await page.keyboard.press('ArrowLeft'); // out of the Home grid, into the rail
+    for (let step = 0; step < 4; step += 1) {
+        if (await page.evaluate(() => document.activeElement.classList.contains('jq-nav-requests'))) break;
+        await page.keyboard.press('ArrowDown');
+    }
+    assert.equal(await activeClass(page), 'jq-nav-requests');
+    await page.keyboard.press('Enter');
+}
+
+for (const outcome of ['succeeds', 'fails its configuration again', 'fails its bridge session']) {
+    test(`Retry that ${outcome} leaves focus somewhere the user can see it`, async () => {
+        const browser = await chromium.launch();
+        try {
+            const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+            let configurationFails = true;
+            await page.route('**/jellyquest-build.json', (route) => (configurationFails
+                ? route.fulfill({ status: 500, contentType: 'application/json', body: '{}' })
+                : route.continue()));
+            await openShellAs(page, 'Alice');
+            await enterRequestsWithArrows(page);
+
+            const retry = page.getByRole('button', { name: 'Retry', exact: true });
+            await retry.waitFor({ state: 'visible', timeout: 2000 });
+            assert.equal(await activeClass(page), 'jq-requests-retry',
+                'the configuration-failure render must put the cursor on its only action');
+            await assertPainted(retry);
+
+            if (outcome !== 'fails its configuration again') configurationFails = false;
+            if (outcome === 'fails its bridge session') {
+                await page.evaluate(() => {
+                    window.JellyQuestRequestsBridge.openSession = () => Promise.reject(new Error('Requests bridge offline'));
+                });
+            }
+            await page.keyboard.press('Enter'); // press Retry, with NO further user input after it
+
+            if (outcome === 'succeeds') {
+                await page.waitForSelector('.jq-requests-input');
+                // The regression this file exists to prevent: nothing the
+                // user did competes with this render, so the search box has
+                // to take focus exactly as it does on a first visit.
+                assert.equal(await activeClass(page), 'jq-requests-input',
+                    'a successful Retry must autofocus the search input, not leave the cursor on the rail');
+            } else if (outcome === 'fails its configuration again') {
+                await page.waitForFunction(() => document.activeElement.classList.contains('jq-requests-retry'));
+                // Retry is re-rendered and is again the screen's only
+                // action, so it is again where the cursor belongs -- a user
+                // holding Enter through a flaky config load keeps retrying.
+                assert.equal(await activeClass(page), 'jq-requests-retry');
+            } else {
+                const message = page.getByText('Requests are unavailable right now.', { exact: true });
+                await message.waitFor({ state: 'visible', timeout: 2000 });
+                await assertPainted(message);
+                // This render has NOTHING focusable: the message is a <p>
+                // and the failure path deliberately offers no Retry. So the
+                // rail fallback in focusFirst() is the right answer and the
+                // one this pins -- the alternative is focus on <body>, i.e.
+                // no cursor at all, which on a TV reads as a dead app.
+                assert.equal(await activeClass(page), 'jq-profile-switch',
+                    'a Retry whose bridge fails must still leave a visible cursor on the rail');
+            }
+            await assertPainted(page.locator(':focus'));
+        } finally {
+            await browser.close();
+        }
+    });
+}

@@ -3682,13 +3682,42 @@
         var bridge = window.JellyQuestRequestsBridge;
         status.textContent = 'Checking Requests for this profile…';
 
+        // What focusFirst()'s guard (focus.js) compares against when
+        // renderSearch's focus call lands, two bridge round trips from now.
+        //
+        // The comparison is element IDENTITY, not causation: if a DIFFERENT
+        // visible element holds focus by then, this render's autofocus is
+        // suppressed. That stands in for "the user moved on", and only
+        // stands in -- focus that leaves the captured element and returns to
+        // it is indistinguishable from focus that never moved, and an
+        // application-driven move (a modal opening, a navigation elsewhere)
+        // reads exactly like a remote key press. Those are limitations of
+        // the shared guard, not of this line, and they are worth what they
+        // cost here; nothing in this file can strengthen them.
+        //
+        // What this line does establish is the other half of the comparison:
+        // that no focus placement of THIS render's own doing falls between
+        // the capture and the check. It is taken after every synchronous
+        // focus placement the render performs and immediately before the
+        // first bridge call, and no path from here to renderSearch places
+        // focus in between. Taking it at the top of the function instead
+        // recorded a state the render then changed itself. Arriving from
+        // Retry, the pressed button is already gone -- app.js's
+        // showRequests() empties `container` before this function is ever
+        // entered -- so document.activeElement is <body> at entry, and the
+        // focusFirst() a few lines up finds nothing focusable in the
+        // half-built screen and takes focus.js's rail fallback. Captured
+        // before that ran, the fallback itself compared as a change, and a
+        // successful Retry never focused its search box.
+        var focusAtRequest = document.activeElement;
+
         bridge.checkEligibility(config.bridgeUrl, config.userId, config.userName).then(function (eligible) {
             if (!eligible) {
                 status.textContent = 'Requests are not available for this profile.';
                 return;
             }
             return bridge.openSession(config.bridgeUrl, config.userId, config.userName).then(function () {
-                renderSearch(container, status);
+                renderSearch(container, status, focusAtRequest);
             });
         }).catch(function (error) {
             status.textContent = 'Requests are unavailable right now.';
@@ -3696,7 +3725,7 @@
         });
     }
 
-    function renderSearch(container, status) {
+    function renderSearch(container, status, focusAtRequest) {
         status.hidden = true;
 
         var input = document.createElement('input');
@@ -3748,7 +3777,7 @@
             });
         }
 
-        window.JellyQuestFocus.focusFirst(container);
+        window.JellyQuestFocus.focusFirst(container, focusAtRequest);
     }
 
     function createRequestCard(movie) {
