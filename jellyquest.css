@@ -604,6 +604,13 @@ html, body {
     margin: 0 0 16px;
 }
 
+.jq-detail-context {
+    color: #cfd2d6;
+    font-size: 22px;
+    font-weight: normal;
+    margin-left: 16px;
+}
+
 /* The one child that gives -- see .jq-detail-screen above. */
 .jq-detail-overview {
     font-size: 18px;

@@ -36,6 +36,7 @@ const JS_FILES = [
     path.join(root, 'src/overlay/screens/library.js'),
     path.join(root, 'src/overlay/screens/search.js'),
     path.join(root, 'src/overlay/screens/detail.js'),
+    path.join(root, 'src/overlay/screens/series.js'),
     path.join(root, 'src/overlay/screens/requests.js'),
     path.join(root, 'src/overlay/shell.js'),
     // app.js must come last: it's the one that actively calls into the

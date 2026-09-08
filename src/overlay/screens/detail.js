@@ -1,8 +1,7 @@
-// Detail/playback screen for Movie items -- see DETAIL_ACTIONS.md for
-// the full intended behavior across movies/shows/sports. This first pass
-// covers movies only (Resume/Play, Trailer, My List); Series/Sports-specific
-// behavior (seasons, episodes, highlights, chapters) is explicit follow-up
-// work, not silently missing -- see docs/rebuild-plan.md's Phase 3 status.
+// Detail/playback screen for individually playable Movie and Episode items.
+// See DETAIL_ACTIONS.md for the broader intended behavior. Series have their
+// own route seam in series.js; show browsing and Sports-specific behavior
+// remain explicit follow-up work.
 //
 // There's no dedicated "Back" control here: per DETAIL_ACTIONS.md, Left
 // from the first action returns to the persistent rail (shell.js), which
@@ -71,9 +70,31 @@
         container.innerHTML = '';
         container.className = 'jq-detail-screen';
 
+        var episodeText = item.Type === 'Episode'
+            ? window.JellyQuestCards.textFor(item, 'browse')
+            : null;
         var heading = document.createElement('h1');
         heading.className = 'jq-detail-title';
-        heading.textContent = item.Name + (item.ProductionYear ? ' (' + item.ProductionYear + ')' : '');
+        var headingName = document.createElement('span');
+        headingName.className = 'jq-detail-title-name';
+        headingName.textContent = episodeText
+            ? episodeText.title
+            : item.Name + (item.ProductionYear ? ' (' + item.ProductionYear + ')' : '');
+        heading.appendChild(headingName);
+
+        // Keep episode identity in the title line instead of adding another
+        // block before the actions. MEASURED: the former block moved the
+        // action row from y=165 to y=215; after pointer activation, the
+        // polyfill ranked from its saved mouse starting point and ArrowLeft
+        // selected Start Over before the rail. An inline, smaller label keeps
+        // the established action geometry while retaining all context.
+        if (episodeText && episodeText.meta) {
+            var episodeContext = document.createElement('span');
+            episodeContext.className = 'jq-detail-context';
+            episodeContext.textContent = episodeText.meta;
+            heading.appendChild(document.createTextNode(' '));
+            heading.appendChild(episodeContext);
+        }
         container.appendChild(heading);
 
         var actions = document.createElement('div');

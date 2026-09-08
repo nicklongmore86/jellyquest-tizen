@@ -2,7 +2,7 @@
 // screens: creates #jellyquest-root (no host markup required -- gulp's
 // injection provides no container div), then switches between the
 // profile picker and the shell, and -- within the shell -- between
-// Home/Search/Library/Detail/Requests. The shell's rail (shell.js) stays
+// Home/Search/Library/Detail/Series/Requests. The shell's rail (shell.js) stays
 // mounted across all of those; only its content area swaps.
 //
 // Also owns the remote's hardware Back button: every screen but Home
@@ -68,7 +68,7 @@
         currentBackHandler = confirmExit; // top of the navigation stack: Back offers to quit
         window.JellyQuestRequestsBridge.close();
         window.JellyQuestHomeScreen.render(window.JellyQuestShell.getContent(), {
-            onSelectItem: function (item) { showDetail(item, showHome); },
+            onSelectItem: function (item) { showItem(item, showHome); },
             onSeeAll: function (row) { showLibrary(row, showHome); },
         });
     }
@@ -77,7 +77,7 @@
         currentBackHandler = showHome;
         window.JellyQuestRequestsBridge.close();
         window.JellyQuestSearchScreen.render(window.JellyQuestShell.getContent(), {
-            onSelectItem: function (item) { showDetail(item, showSearch); },
+            onSelectItem: function (item) { showItem(item, showSearch); },
         });
     }
 
@@ -85,7 +85,7 @@
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
         window.JellyQuestLibraryScreen.render(window.JellyQuestShell.getContent(), row, {
-            onSelectItem: function (item) { showDetail(item, function () { showLibrary(row, returnTo); }); },
+            onSelectItem: function (item) { showItem(item, function () { showLibrary(row, returnTo); }); },
             onBack: returnTo,
         });
     }
@@ -203,12 +203,31 @@
         return copy;
     }
 
+    // Route by media type before applying playability. A Series is a folder
+    // and therefore correctly fails canPlay(), but it is still a supported
+    // navigation target with its own screen seam for S4 to replace.
+    function showItem(item, returnTo) {
+        if (item && item.Type === 'Series') {
+            showSeries(item, returnTo);
+            return;
+        }
+        showDetail(item, returnTo);
+    }
+
+    function showSeries(item, returnTo) {
+        currentBackHandler = returnTo;
+        window.JellyQuestRequestsBridge.close();
+        window.JellyQuestSeriesScreen.render(window.JellyQuestShell.getContent(), item, {
+            onBack: returnTo
+        });
+    }
+
     function showDetail(item, returnTo) {
         currentBackHandler = returnTo;
         window.JellyQuestRequestsBridge.close();
         var container = window.JellyQuestShell.getContent();
-        // All card entry points share this guard. Series browsing is separate
-        // work; give unsupported items a visible state and a remote-safe exit.
+        // All non-Series card entry points share this guard. Unsupported
+        // items get a visible state and a remote-safe exit.
         if (!canPlay(item, false)) {
             container.innerHTML = '';
             container.className = 'jq-detail-screen';
@@ -218,7 +237,7 @@
             container.appendChild(heading);
             var status = document.createElement('p');
             status.className = 'jq-detail-error';
-            status.textContent = item && item.Type === 'Series' ? 'Series browsing is not available yet.' : 'This item is not available for playback.';
+            status.textContent = 'This item is not available for playback.';
             container.appendChild(status);
             var back = document.createElement('button');
             back.className = 'jq-back-button jq-focusable';
