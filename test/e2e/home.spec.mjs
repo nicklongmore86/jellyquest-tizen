@@ -1,5 +1,7 @@
-// Home screen (see docs/rebuild-plan.md, Phase 3): Continue Watching +
-// Recently Added rows.
+// Home screen (see docs/rebuild-plan.md, Phase 3): Continue Watching, Next Up
+// and Recently Added rows. The Next Up row has its own spec
+// (home-next-up.spec.mjs); it appears here only where it changes what these
+// pre-existing assertions see.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { chromium } from 'playwright';
@@ -51,7 +53,7 @@ test('shows Continue Watching only for items with saved progress, and Recently A
         const headings = await page.evaluate(() =>
             Array.from(document.querySelectorAll('.jq-home-row-heading')).map((h) => h.textContent)
         );
-        assert.deepEqual(headings, ['Continue Watching', 'Recently Added']);
+        assert.deepEqual(headings, ['Continue Watching', 'Next Up', 'Recently Added']);
 
         const continueWatching = await page.evaluate(() =>
             Array.from(document.querySelectorAll('.jq-home-row-section')[0].querySelectorAll('.jq-media-card'))
@@ -74,7 +76,7 @@ test('autofocuses the first card, and arrow keys move within and between rows', 
 
         await page.keyboard.press('ArrowDown');
         const afterDown = await page.evaluate(() => document.activeElement.getAttribute('data-item-id'));
-        assert.notEqual(afterDown, 'movie-1', 'Down should leave Continue Watching for Recently Added');
+        assert.notEqual(afterDown, 'movie-1', 'Down should leave Continue Watching for the row below it');
 
         await page.keyboard.press('ArrowUp');
         assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-1');

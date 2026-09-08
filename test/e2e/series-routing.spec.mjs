@@ -26,8 +26,13 @@ async function withPage(run) {
     }
 }
 
+// `.first()` because Home grew a Next Up row and an id can now legitimately
+// appear twice on the screen: MEASURED, the library-wide /Shows/NextUp call
+// returns an in-progress episode ITSELF, so episode-516 is in both Continue
+// Watching and Next Up. Either card opens the same Detail screen, which is
+// what these tests are about.
 async function openHomeItem(page, itemId) {
-    await page.locator(`[data-item-id="${itemId}"]`).click();
+    await page.locator(`[data-item-id="${itemId}"]`).first().click();
 }
 
 

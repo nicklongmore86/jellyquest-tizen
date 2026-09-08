@@ -64,7 +64,9 @@ async function openScreen(page, screen) {
 for (const [selector, screen, axis, containers = 1] of [
     ['.jq-rail', 'home', 'y'],
     ['.jq-profiles-row', 'profiles', 'x'],
-    ['.jq-home-row', 'home', 'x', 2],
+    // Three rows since Next Up joined Home; it reuses .jq-home-row, so the
+    // sibling-margin spacing convention has to hold for it too.
+    ['.jq-home-row', 'home', 'x', 3],
     ['.jq-search-results', 'search', 'x'],
     ['.jq-detail-actions', 'detail', 'x'],
     ['.jq-series-actions', 'series', 'x'],

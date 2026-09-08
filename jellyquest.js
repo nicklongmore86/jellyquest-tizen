@@ -2414,11 +2414,13 @@
     // an earlier revision of this comment said nothing passed 'series' yet,
     // and named S4 as the caller that would.
     //
-    //   'browse'  -- Home's Continue Watching row. It is the only list query
-    //                in the app that returns Episodes at all ('Movie,Episode',
-    //                screens/home.js); Library and Search both query
-    //                'Movie,Series' and so render no episode cards, which
-    //                means they never reach the Episode branch below.
+    //   'browse'  -- Home's Continue Watching row ('Movie,Episode') and its
+    //                Next Up row (the library-wide /Shows/NextUp call, which
+    //                returns nothing BUT Episodes -- MEASURED, every item was
+    //                Type 'Episode'), both in screens/home.js. Library and
+    //                Search query 'Movie,Series' and so render no episode
+    //                cards, which means they never reach the Episode branch
+    //                below.
     //   'series'  -- the Series browse screen's episode grid
     //                (screens/series.js).
     function cardText(item, context) {
@@ -2746,8 +2748,8 @@
 })();
 
 /* ---- src/overlay/screens/home.js ---- */
-// Home screen: Continue Watching + Recently Added rows. Real screen
-// content replacing the Phase 2 placeholder ("Home -- Phase 3").
+// Home screen: Continue Watching + Next Up + Recently Added rows. Real
+// screen content replacing the Phase 2 placeholder ("Home -- Phase 3").
 (function () {
     'use strict';
 
@@ -2763,6 +2765,68 @@
             {
                 title: 'Continue Watching',
                 fetch: function () { return window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' }); },
+                seeAll: false,
+            },
+            // Next Up sits between them, matching Jellyfin's own default home
+            // layout -- Resume, then NextUp, then LatestMedia
+            // (.cache/jellyfin-web/src/types/homeSectionType.ts:18-27, which
+            // mirrors the SERVER's DisplayPreferences defaults). It reads the
+            // same way on a television: "carry on with what you paused",
+            // then "start the next episode of a show you are partway
+            // through", then "look at what is new".
+            //
+            // This is the LIBRARY-WIDE /Shows/NextUp call -- no SeriesId --
+            // and it is NOT the Series screen's Continue. MEASURED against
+            // the household's Jellyfin 10.11.11: Series Continue plays the
+            // episode AFTER the in-progress one, while library-wide Next Up
+            // returns the IN-PROGRESS EPISODE ITSELF (Pixel Move came back at
+            // PlayedPercentage 66.2). So these cards route to Episode Detail
+            // like every other episode card here, and Detail's own
+            // Resume/Play/Start Over do the right thing per item. There is
+            // deliberately no second selection algorithm in this screen.
+            //
+            // Sent, and MEASURED as HONOURED: UserId, Limit, EnableRewatching.
+            // Deliberately NOT sent:
+            //   SortBy/SortOrder     MEASURED accepted and SILENTLY IGNORED
+            //                        here; the ignored variants came back
+            //                        byte-identical. Asking the server to
+            //                        sort would look like it worked. The
+            //                        server's order is descending most recent
+            //                        activity anywhere in the SERIES -- not
+            //                        the returned episode's own date -- and
+            //                        the client cannot request another, so
+            //                        this row does not re-sort either.
+            //   IsMissing/           also MEASURED accepted and ignored on
+            //   IsVirtualUnaired     THIS endpoint, and zero virtual records
+            //                        appear in its response. Sending them
+            //                        would imply a guarantee that does not
+            //                        exist. (They are required on
+            //                        /Shows/{id}/Episodes -- see series.js --
+            //                        which is a different endpoint.)
+            //   DisableFirstEpisode  MEASURED to have no observable effect.
+            //
+            // Limit: 8 matches Recently Added below rather than upstream's 15
+            // (nextUp.ts:24). MEASURED cost on the household's largest
+            // profile: 15 items / 26,195 bytes unbounded against 8 items /
+            // 14,143 bytes at Limit 8. The row is a horizontally scrolled
+            // rail, so eight cards is already more than one screen, and the
+            // measured worst case hides at most seven items. ACCEPTED
+            // LIMITATION: there is no "See All" to reach those seven --
+            // the Library screen is a getItems screen and cannot express
+            // /Shows/NextUp, and building a Next Up library is out of this
+            // task's scope.
+            {
+                title: 'Next Up',
+                fetch: function () {
+                    // Same guard shape as series.js's Continue action: an
+                    // older ApiClient without this method must degrade to the
+                    // row's own unavailable message, not throw out of the map
+                    // below and take the other two rows with it.
+                    if (typeof window.ApiClient.getNextUpEpisodes !== 'function') {
+                        return Promise.reject(new Error('ApiClient.getNextUpEpisodes is unavailable'));
+                    }
+                    return window.ApiClient.getNextUpEpisodes({ UserId: userId, Limit: 8, EnableRewatching: false });
+                },
                 seeAll: false,
             },
             {

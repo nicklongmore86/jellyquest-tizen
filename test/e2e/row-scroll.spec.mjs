@@ -147,14 +147,16 @@ test('Home: ArrowRight reaches the last card and the "See All" button of a row w
 
         // The row has to actually overflow, or this test proves nothing.
         const overflow = await page.evaluate(() => {
-            const row = document.querySelectorAll('.jq-home-row')[1];
+            // Recently Added is the third row since Next Up joined Home.
+            const row = document.querySelectorAll('.jq-home-row')[2];
             return { scrollWidth: row.scrollWidth, clientWidth: row.clientWidth, scrollLeft: row.scrollLeft };
         });
         assert.ok(overflow.scrollWidth > overflow.clientWidth,
             `Recently Added must overflow to exercise this: ${overflow.scrollWidth} <= ${overflow.clientWidth}`);
         assert.equal(overflow.scrollLeft, 0, 'a freshly rendered row starts at its beginning');
 
-        await page.keyboard.press('ArrowDown'); // Continue Watching -> Recently Added
+        await page.keyboard.press('ArrowDown'); // Continue Watching -> Next Up
+        await page.keyboard.press('ArrowDown'); // Next Up -> Recently Added
         const row = await childIds(page, '.jq-home-row-section:last-of-type .jq-home-row');
         assert.equal(row[row.length - 1], 'jq-see-all', 'fixture: See All is the last thing in the row');
 
@@ -173,7 +175,7 @@ test('Home: ArrowRight reaches the last card and the "See All" button of a row w
         const back = await walk(page, 'ArrowLeft', viewport);
         assert.deepEqual(back.slice(0, row.length), row.slice().reverse(),
             'ArrowLeft must visit every item back to the first card, in order');
-        assert.equal(await page.evaluate(() => document.querySelectorAll('.jq-home-row')[1].scrollLeft), 0,
+        assert.equal(await page.evaluate(() => document.querySelectorAll('.jq-home-row')[2].scrollLeft), 0,
             'returning to the first card must scroll the row back to its beginning');
     } finally {
         await browser.close();
@@ -186,6 +188,7 @@ test('Home: Enter on the keyboard-reached "See All" opens the Library grid', asy
     try {
         const page = await browser.newPage({ viewport });
         await signInAsAlice(page);
+        await page.keyboard.press('ArrowDown');
         await page.keyboard.press('ArrowDown');
         await walk(page, 'ArrowRight', viewport);
 

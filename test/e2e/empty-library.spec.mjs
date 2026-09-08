@@ -27,6 +27,12 @@ async function emptyLibrary(page) {
                 const getItems = value.getItems.bind(value);
                 value.getItems = (userId, options) =>
                     getItems(userId, options).then((result) => ({ ...result, Items: [] }));
+                // Home's Next Up row does not go through getItems -- an empty
+                // library has to empty /Shows/NextUp too, or Home is not
+                // actually empty.
+                const getNextUpEpisodes = value.getNextUpEpisodes.bind(value);
+                value.getNextUpEpisodes = (options) =>
+                    getNextUpEpisodes(options).then((result) => ({ ...result, Items: [], TotalRecordCount: 0 }));
             },
         });
     });
