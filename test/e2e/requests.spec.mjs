@@ -436,3 +436,147 @@ test('Requests surfaces a synchronous renderer throw after configuration loads',
         await browser.close();
     }
 });
+
+// ---- Late-completion focus steals (the fifth of this class) -------------
+//
+// Requests waits on the bridge -- checkEligibility() then openSession(),
+// two network round trips -- while the rail stays mounted and focusable.
+// An INSTANT bridge fixture cannot express this at all: renderSearch()'s
+// focusFirst() runs before any key press can land, which is exactly why
+// this survived the rest of the suite. So the bridge call is deferred
+// under test control, and the cursor is moved with REAL arrow keys (a
+// programmatic .focus() would not prove the polyfill's own path works).
+async function openShellAs(page, profileName) {
+    await page.goto(simulatorUrl);
+    await page.waitForSelector('.jq-profile-card');
+    await page.evaluate((name) => {
+        Array.from(document.querySelectorAll('.jq-profile-card')).find((card) => card.textContent === name).click();
+    }, profileName);
+    await page.waitForSelector('.jq-shell');
+    await page.waitForSelector('.jq-media-card'); // let Home settle, so nothing else moves focus later
+}
+
+// Holds the named bridge method open until releaseBridge(). `outcome`
+// 'reject' fails it instead, for the error path.
+async function deferBridge(page, method, outcome) {
+    await page.evaluate(([method, outcome]) => {
+        const real = window.JellyQuestRequestsBridge[method];
+        window.__pendingBridge = [];
+        window.JellyQuestRequestsBridge[method] = function () {
+            const receiver = this;
+            const args = arguments;
+            return new Promise((resolve, reject) => {
+                window.__pendingBridge.push(() => {
+                    if (outcome === 'reject') return reject(new Error('Requests bridge offline'));
+                    real.apply(receiver, args).then(resolve, reject);
+                });
+            });
+        };
+    }, [method, outcome]);
+}
+
+// A real mouse click on the rail item, which focuses it the way pressing
+// Enter on it does -- so the captured "focus at render start" is a rendered,
+// visible rail button, the case that could wrongly suppress the guard.
+async function enterRequestsAndHold(page) {
+    await page.locator('.jq-nav-requests').click();
+    await page.waitForFunction(() => window.__pendingBridge && window.__pendingBridge.length === 1);
+    assert.equal(await activeClass(page), 'jq-nav-requests',
+        'entering Requests must leave focus on the rail item that was activated');
+}
+
+async function releaseBridge(page) {
+    await page.evaluate(() => window.__pendingBridge.splice(0).forEach((release) => release()));
+}
+
+function activeClass(page) {
+    return page.evaluate(() => {
+        const active = document.activeElement;
+        const names = ['jq-nav-home', 'jq-nav-search', 'jq-nav-requests', 'jq-profile-switch', 'jq-requests-input'];
+        return names.find((name) => active.classList.contains(name)) || active.className || active.tagName;
+    });
+}
+
+test('a delayed Requests session preserves a newer rendered rail selection', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openShellAs(page, 'Alice');
+        await deferBridge(page, 'openSession');
+        await enterRequestsAndHold(page);
+
+        await page.keyboard.press('ArrowUp'); // Requests -> Search
+        await page.keyboard.press('ArrowUp'); // Search   -> Home
+        assert.equal(await activeClass(page), 'jq-nav-home',
+            'the delayed-session precondition must leave a real selection on Home');
+        await assertPainted(page.locator(':focus'));
+
+        await releaseBridge(page);
+        await page.waitForSelector('.jq-requests-input');
+
+        assert.equal(await activeClass(page), 'jq-nav-home',
+            'a late Requests session must not override the newer Home selection');
+        await assertPainted(page.locator(':focus'));
+    } finally {
+        await browser.close();
+    }
+});
+
+// NON-REGRESSION GUARD -- green before this change and after it. Its job is
+// the other half of the guard: focusFirst()'s expectedFocus check must not
+// suppress ORDINARY autofocus. shell.js focuses the rail before any screen
+// renders, so the element captured at render start is itself a visible,
+// rendered rail button; only the identity clause
+// (document.activeElement !== expectedFocus) keeps hasVisibleFocus() from
+// swallowing the normal case. Delete that clause and this test fails.
+test('a delayed Requests session still autofocuses its search input without newer user input', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await openShellAs(page, 'Alice');
+        await deferBridge(page, 'openSession');
+        await enterRequestsAndHold(page);
+
+        await releaseBridge(page);
+        await page.waitForSelector('.jq-requests-input');
+
+        assert.equal(await activeClass(page), 'jq-requests-input',
+            'Requests must keep its ordinary search-input autofocus when focus has not moved');
+        await assertPainted(page.locator(':focus'));
+    } finally {
+        await browser.close();
+    }
+});
+
+// NON-REGRESSION GUARDs -- the two paths that end the render WITHOUT
+// reaching renderSearch(). Neither calls focusFirst() after its await
+// today; these pin that, since a "show a message and also focus something"
+// change to either would reintroduce the same steal.
+for (const path of ['an ineligible profile', 'a session error']) {
+    test(`a delayed Requests render that ends in ${path} leaves a newer rail selection alone`, async () => {
+        const browser = await chromium.launch();
+        try {
+            const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+            const ineligible = path === 'an ineligible profile';
+            await openShellAs(page, ineligible ? 'Charlie' : 'Alice'); // Charlie: not in eligibleUserIds
+            await deferBridge(page, ineligible ? 'checkEligibility' : 'openSession', ineligible ? null : 'reject');
+            await enterRequestsAndHold(page);
+
+            await page.keyboard.press('ArrowUp'); // Requests -> Search
+            assert.equal(await activeClass(page), 'jq-nav-search');
+
+            await releaseBridge(page);
+            const message = page.getByText(ineligible
+                ? 'Requests are not available for this profile.'
+                : 'Requests are unavailable right now.', { exact: true });
+            await message.waitFor({ state: 'visible', timeout: 2000 });
+            await assertPainted(message);
+
+            assert.equal(await activeClass(page), 'jq-nav-search',
+                'a late Requests failure must not override the newer Search selection');
+            await assertPainted(page.locator(':focus'));
+        } finally {
+            await browser.close();
+        }
+    });
+}

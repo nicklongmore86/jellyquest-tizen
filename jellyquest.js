@@ -3658,6 +3658,14 @@
         container.innerHTML = '';
         container.className = 'jq-requests-screen';
 
+        // Where the cursor sits as this render begins, so the one focus
+        // call that lands after the bridge round trips (renderSearch's,
+        // below) can be suppressed if the user has moved on since. See
+        // focusFirst()'s expectedFocus guard in focus.js. The two
+        // focusFirst() calls in this function are synchronous with this
+        // line and cannot be overtaken, so they pass no expectation.
+        var focusAtRequest = document.activeElement;
+
         var status = document.createElement('p');
         status.className = 'jq-requests-status';
         container.appendChild(status);
@@ -3688,7 +3696,7 @@
                 return;
             }
             return bridge.openSession(config.bridgeUrl, config.userId, config.userName).then(function () {
-                renderSearch(container, status);
+                renderSearch(container, status, focusAtRequest);
             });
         }).catch(function (error) {
             status.textContent = 'Requests are unavailable right now.';
@@ -3696,7 +3704,7 @@
         });
     }
 
-    function renderSearch(container, status) {
+    function renderSearch(container, status, focusAtRequest) {
         status.hidden = true;
 
         var input = document.createElement('input');
@@ -3748,7 +3756,7 @@
             });
         }
 
-        window.JellyQuestFocus.focusFirst(container);
+        window.JellyQuestFocus.focusFirst(container, focusAtRequest);
     }
 
     function createRequestCard(movie) {
