@@ -42,10 +42,14 @@
             // The only fixture item with multiple tracks -- exercises the
             // conditionally-shown More/Playback Options menu.
             MediaStreams: [
-                { Type: 'Audio', DisplayTitle: 'English 5.1' },
-                { Type: 'Audio', DisplayTitle: 'French Stereo' },
-                { Type: 'Subtitle', DisplayTitle: 'English' },
-                { Type: 'Subtitle', DisplayTitle: 'French' },
+                // SOURCE-CONFIRMED in pinned jellyfin-web playbackmanager.js
+                // lines 1233, 1238 and 1289: playback matches MediaStream.Index.
+                // Keep it different from array position so a caller using the
+                // latter cannot pass against this fixture.
+                { Type: 'Audio', DisplayTitle: 'English 5.1', Index: 2 },
+                { Type: 'Audio', DisplayTitle: 'French Stereo', Index: 5 },
+                { Type: 'Subtitle', DisplayTitle: 'English', Index: 9 },
+                { Type: 'Subtitle', DisplayTitle: 'French', Index: 12 },
             ],
         },
         // The RemoteTrailers-only case. Real servers return this shape, and
@@ -89,29 +93,95 @@
     });
 
     var MEDIA = MOVIES.slice();
+    var SERIES = [];
+    var SEASONS = [];
+    var EPISODES = [];
+    var VIRTUAL_EPISODES = [];
+    var PAW_PATROL_ID = 'series-paw-patrol';
+    var NHL_ID = 'series-nhl';
     // 54 Movie/Series entries exceed both Home's 8 and Library's 50 cap.
     // Generated dates keep movie-10 newest, with a Series beside it.
     var i;
-    for (i = 1; i <= 44; i++) {
-        MEDIA.push({ Id: 'series-' + i, Name: 'Northern Stories ' + i, Type: 'Series',
+    for (i = 1; i <= 42; i++) {
+        SERIES.push({ Id: 'series-' + i, Name: 'Northern Stories ' + i, Type: 'Series',
             IsFolder: true, ParentId: 'shows', ServerId: SERVER_ID,
             ImageTags: { Primary: 'preview-v1' },
-            DateCreated: i === 1 ? '2026-08-09T12:00:00Z' : '2025-01-01T00:00:00Z' });
+            DateCreated: i === 1 ? '2026-08-09T12:00:00Z' : '2025-01-01T00:00:00Z',
+            Overview: 'A fixture series with enough metadata for a full-item fetch.', LocalTrailerCount: 0 });
     }
+    // MEASURED shapes: PAW Patrol is the deepest real series (346 episodes
+    // over 13 seasons, plus 129 virtual placeholders); NHL has zero episodes.
+    SERIES.push({ Id: PAW_PATROL_ID, Name: 'PAW Patrol', Type: 'Series', IsFolder: true,
+        ParentId: 'shows', ServerId: SERVER_ID, ImageTags: { Primary: 'preview-v1' },
+        DateCreated: '2025-01-01T00:00:00Z', Overview: 'Rescue pups protect Adventure Bay.', LocalTrailerCount: 0 });
+    SERIES.push({ Id: NHL_ID, Name: 'NHL', Type: 'Series', IsFolder: true,
+        ParentId: 'sports', ServerId: SERVER_ID, ImageTags: { Primary: 'preview-v1' },
+        DateCreated: '2025-01-01T00:00:00Z', Overview: 'A deliberately empty series.', LocalTrailerCount: 0 });
+    MEDIA = MEDIA.concat(SERIES);
+
     // 33/37 seasons have Primary (89.2% rounded).
     for (i = 1; i <= 37; i++) {
-        MEDIA.push({ Id: 'season-' + i, Name: 'Season ' + i, Type: 'Season',
-            IsFolder: true, ParentId: 'series-1', SeriesId: 'series-1', SeriesName: 'Northern Stories 1',
-            IndexNumber: i, ServerId: SERVER_ID, ImageTags: i <= 33 ? { Primary: 'preview-v1' } : {} });
+        var pawSeason = i > 24;
+        var seasonNumber = pawSeason ? i - 24 : i;
+        var seasonSeriesId = pawSeason ? PAW_PATROL_ID : 'series-1';
+        var seasonSeriesName = pawSeason ? 'PAW Patrol' : 'Northern Stories 1';
+        SEASONS.push({ Id: 'season-' + i, Name: 'Season ' + seasonNumber, Type: 'Season',
+            IsFolder: true, ParentId: seasonSeriesId, SeriesId: seasonSeriesId, SeriesName: seasonSeriesName,
+            IndexNumber: seasonNumber, ServerId: SERVER_ID, ImageTags: i <= 33 ? { Primary: 'preview-v1' } : {},
+            Overview: 'A fixture season returned richly only by getItem.', LocalTrailerCount: 0 });
     }
-    // 515/700 Primary (73.6%); 699/700 parent backdrops (99.86%).
-    for (i = 1; i <= 700; i++) {
-        MEDIA.push({ Id: 'episode-' + i, Name: (i <= 30 ? 'Quiet Signal Episode ' : 'Northern Journey ') + i, Type: 'Episode',
-            IsFolder: false, ParentId: 'season-1', SeriesId: 'series-1', SeriesName: 'Northern Stories 1',
-            ParentIndexNumber: 1, IndexNumber: i, ServerId: SERVER_ID,
+    MEDIA = MEDIA.concat(SEASONS);
+
+    function makeEpisode(idNumber, seriesId, seriesName, seasonId, parentIndex, indexNumber, name) {
+        // Spread the measured 26.4% missing-Primary share across the fixture
+        // instead of clustering every missing image at the end of one series.
+        var hasPrimary = Math.floor(idNumber * 185 / 700) === Math.floor((idNumber - 1) * 185 / 700);
+        return { Id: 'episode-' + idNumber, Name: name, Type: 'Episode',
+            IsFolder: false, ParentId: seasonId, SeasonId: seasonId, SeriesId: seriesId, SeriesName: seriesName,
+            ParentIndexNumber: parentIndex, IndexNumber: indexNumber, ServerId: SERVER_ID,
             RunTimeTicks: 2700 * TICKS_PER_SECOND,
-            ImageTags: i <= 515 ? { Primary: 'preview-v1' } : {},
-            ParentBackdropItemId: 'series-1', ParentBackdropImageTags: i < 700 ? ['backdrop-v1'] : [] });
+            ImageTags: hasPrimary ? { Primary: 'preview-v1' } : {},
+            ParentBackdropItemId: seriesId, ParentBackdropImageTags: idNumber < 700 ? ['backdrop-v1'] : [],
+            Overview: 'A full episode synopsis that list endpoints must omit.', LocalTrailerCount: 0,
+            MediaStreams: [
+                // LIMITATION: every fixture episode deliberately uses this same
+                // pair. It distinguishes stream Index from array position, but
+                // does not test carrying different selections between episodes.
+                { Type: 'Audio', DisplayTitle: 'English Stereo', Index: 3 },
+                { Type: 'Subtitle', DisplayTitle: 'English', Index: 8 },
+            ],
+            MediaSources: [{ Id: 'source-' + idNumber }] };
+    }
+
+    // 515/700 Primary (73.6%); 699/700 parent backdrops (99.86%).
+    // The list fixture stays at 700 real episodes for fast browser tests, but
+    // PAW Patrol itself is generated at its full MEASURED 346-item scale.
+    for (i = 1; i <= 354; i++) {
+        var northernSeason = Math.floor((i - 1) / 15) + 1;
+        var northernIndex = (i - 1) % 15 + 1;
+        EPISODES.push(makeEpisode(i, 'series-1', 'Northern Stories 1', 'season-' + northernSeason,
+            northernSeason, northernIndex, (i <= 30 ? 'Quiet Signal Episode ' : 'Northern Journey ') + i));
+    }
+    var episodeId = 355;
+    for (var pawSeasonNumber = 1; pawSeasonNumber <= 13; pawSeasonNumber++) {
+        // INFERRED distribution: the measured aggregate is 346/13, but the
+        // per-season counts were not probed. Eight seasons get 27 and five 26.
+        var episodesInSeason = pawSeasonNumber <= 8 ? 27 : 26;
+        for (var pawIndex = 1; pawIndex <= episodesInSeason; pawIndex++) {
+            EPISODES.push(makeEpisode(episodeId, PAW_PATROL_ID, 'PAW Patrol', 'season-' + (24 + pawSeasonNumber),
+                pawSeasonNumber, pawIndex, 'PAW Patrol ' + pawSeasonNumber + 'x' + pawIndex));
+            episodeId++;
+        }
+    }
+    MEDIA = MEDIA.concat(EPISODES);
+
+    for (i = 1; i <= 129; i++) {
+        var virtualSeason = (i - 1) % 13 + 1;
+        VIRTUAL_EPISODES.push({ Id: 'paw-virtual-' + i, Name: 'Virtual PAW Patrol Episode ' + i, Type: 'Episode',
+            IsFolder: false, ParentId: 'season-' + (24 + virtualSeason), SeasonId: 'season-' + (24 + virtualSeason),
+            SeriesId: PAW_PATROL_ID, SeriesName: 'PAW Patrol', ParentIndexNumber: virtualSeason,
+            IndexNumber: 100 + i, ServerId: SERVER_ID, LocationType: 'Virtual', ImageTags: {},
+            ParentBackdropItemId: PAW_PATROL_ID, ParentBackdropImageTags: ['backdrop-v1'] });
     }
 
     // Per-user UserData (playback progress, favorites) -- keyed by user id
@@ -119,6 +189,12 @@
     var USER_DATA = {
         'user-alice': {
             'episode-516': { LastPlayedDate: '2026-09-05T12:00:00Z', PlaybackPositionTicks: 600 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
+            // Positions 38, 56 and 73 in PAW Patrol's real episode order.
+            // They make ignored Filters/SortBy observable instead of allowing
+            // an already-sorted first record to certify a broken query.
+            'episode-392': { LastPlayedDate: '2026-09-01T12:00:00Z', PlaybackPositionTicks: 0, Played: true, IsFavorite: false },
+            'episode-410': { LastPlayedDate: '2026-09-03T12:00:00Z', PlaybackPositionTicks: 0, Played: true, IsFavorite: false },
+            'episode-427': { LastPlayedDate: '2026-09-02T12:00:00Z', PlaybackPositionTicks: 0, Played: true, IsFavorite: false },
             'movie-1': { LastPlayedDate: '2026-09-06T12:00:00Z', PlaybackPositionTicks: 40 * 60 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
             'movie-3': { LastPlayedDate: '2026-09-04T12:00:00Z', PlaybackPositionTicks: 300 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
             'movie-5': { PlaybackPositionTicks: 0, Played: true, IsFavorite: true },
@@ -153,7 +229,7 @@
         'BackdropImageTags', 'ImageBlurHashes', 'LocationType', 'MediaType',
         // Relational fields the measured responses carry for the item types
         // that have them, asserted by test/e2e/library-queries.spec.mjs.
-        'ParentId', 'DateCreated', 'SeriesId', 'SeriesName', 'ParentIndexNumber',
+        'ParentId', 'DateCreated', 'SeriesId', 'SeriesName', 'SeasonId', 'ParentIndexNumber',
         'IndexNumber', 'ParentBackdropItemId', 'ParentBackdropImageTags',
         // Root views only: the measured unscoped /Users/{id}/Items response
         // returns CollectionType on each CollectionFolder. It is not part of
@@ -161,12 +237,61 @@
         'CollectionType',
     ];
 
+    // Jellyfin 10.11's generated API enums. Valid values are accepted even
+    // where the measured Shows/{id}/Episodes endpoint ignores the option;
+    // INFERRED from the generated contract, not live-probed: values outside
+    // these enums are rejected by server model binding.
+    var ITEM_FILTERS = ['Dislikes', 'IsFavorite', 'IsFavoriteOrLikes', 'IsFolder', 'IsNotFolder',
+        'IsPlayed', 'IsResumable', 'IsUnplayed', 'Likes'];
+    var ITEM_SORTS = ['AiredEpisodeOrder', 'AirTime', 'Album', 'AlbumArtist', 'Artist', 'CommunityRating',
+        'CriticRating', 'DateCreated', 'DateLastContentAdded', 'DatePlayed', 'Default', 'IndexNumber',
+        'IsFavoriteOrLiked', 'IsFolder', 'IsPlayed', 'IsUnplayed', 'Name', 'OfficialRating',
+        'ParentIndexNumber', 'PlayCount', 'PremiereDate', 'ProductionYear', 'Random', 'Runtime',
+        'SeriesDatePlayed', 'SeriesSortName', 'SortName', 'StartDate', 'Studio', 'VideoBitRate'];
+    var ITEM_FIELDS = ['AirTime', 'CanDelete', 'CanDownload', 'ChannelImage', 'ChannelInfo', 'Chapters',
+        'ChildCount', 'CumulativeRunTimeTicks', 'CustomRating', 'DateCreated', 'DateLastMediaAdded',
+        'DateLastRefreshed', 'DateLastSaved', 'DisplayPreferencesId', 'EnableMediaSourceDisplay', 'Etag',
+        'ExternalUrls', 'ExtraIds', 'Genres', 'Height', 'IsHD', 'ItemCounts', 'LocalTrailerCount',
+        'MediaSourceCount', 'MediaSources', 'MediaStreams', 'OriginalTitle', 'Overview', 'ParentId', 'Path',
+        'People', 'PlayAccess', 'PrimaryImageAspectRatio', 'ProductionLocations', 'ProviderIds',
+        'RecursiveItemCount', 'RefreshState', 'RemoteTrailers', 'SeasonUserData', 'SeriesStudio', 'Settings',
+        'SortName', 'SpecialEpisodeNumbers', 'SpecialFeatureCount', 'Studios', 'Taglines', 'Tags', 'Trickplay',
+        'Width'];
+
     function projectListFields(item) {
         var projected = {};
         LIST_FIELDS.forEach(function (field) {
             if (Object.prototype.hasOwnProperty.call(item, field)) projected[field] = item[field];
         });
         return projected;
+    }
+
+    function projectShowFields(item, fields) {
+        var projected = projectListFields(item);
+        if (fields === undefined) return projected;
+        var requested = Array.isArray(fields) ? fields : fields.split(',');
+        requested.forEach(function (field) {
+            if (Object.prototype.hasOwnProperty.call(item, field)) projected[field] = item[field];
+        });
+        return projected;
+    }
+
+    function validateFields(fields) {
+        if (fields === undefined) return;
+        var requested = Array.isArray(fields) ? fields : fields.split(',');
+        requested.forEach(function (field) {
+            if (ITEM_FIELDS.indexOf(field) === -1) throw new Error('Unmodeled Fields value: ' + field);
+        });
+    }
+
+    function validateShowOptions(endpoint, options, modeled) {
+        Object.keys(options).forEach(function (key) {
+            if (modeled.indexOf(key) === -1) throw new Error('Unmodeled ' + endpoint + ' option: ' + key);
+        });
+        if (options.UserId !== undefined && typeof options.UserId !== 'string') throw new Error('Unmodeled UserId');
+        if (options.userId !== undefined && typeof options.userId !== 'string') throw new Error('Unmodeled userId');
+        if (options.Fields !== undefined && !Array.isArray(options.Fields) && typeof options.Fields !== 'string') throw new Error('Unmodeled Fields');
+        validateFields(options.Fields);
     }
 
     function withUserData(item, userId) {
@@ -299,17 +424,75 @@
             var page = typeof limit === 'number' ? sorted.slice(start, start + limit) : sorted.slice(start);
             return Promise.resolve({ Items: page.map(projectListFields), TotalRecordCount: sorted.length });
         },
+        // NOT MODELED: getNextUpEpisodes. Its personalized episode-selection
+        // semantics were never probed, so inventing a response would be unsafe.
+        // NOT MODELED: startItemId. Pinned playbackmanager.js sends this key;
+        // the strict option guard below deliberately rejects it until modeled.
+        // MEASURED against Jellyfin 10.11.11: a call without a season returns
+        // every episode; Filters, SortBy and SortOrder are accepted but silently
+        // ignored; Limit is honored while TotalRecordCount remains the pre-Limit
+        // count; the two false virtual switches remove PAW Patrol placeholders.
+        getEpisodes: function (seriesId, options) {
+            options = options || {};
+            validateShowOptions('getEpisodes', options, ['UserId', 'userId', 'SeasonId', 'seasonId', 'IsMissing',
+                'IsVirtualUnaired', 'Filters', 'SortBy', 'SortOrder', 'Limit', 'limit', 'Fields']);
+            if (!SERIES.some(function (series) { return series.Id === seriesId; })) throw new Error('Unknown seriesId');
+            if (options.SeasonId !== undefined && typeof options.SeasonId !== 'string') throw new Error('Unmodeled SeasonId');
+            if (options.seasonId !== undefined && typeof options.seasonId !== 'string') throw new Error('Unmodeled seasonId');
+            if (options.IsMissing !== undefined && typeof options.IsMissing !== 'boolean') throw new Error('Unmodeled IsMissing');
+            if (options.IsVirtualUnaired !== undefined && typeof options.IsVirtualUnaired !== 'boolean') throw new Error('Unmodeled IsVirtualUnaired');
+            if (options.Filters !== undefined && ITEM_FILTERS.indexOf(options.Filters) === -1) throw new Error('Unmodeled Filters');
+            if (options.SortBy !== undefined && ITEM_SORTS.indexOf(options.SortBy) === -1) throw new Error('Unmodeled SortBy');
+            if (options.SortOrder !== undefined && options.SortOrder !== 'Ascending' && options.SortOrder !== 'Descending') throw new Error('Unmodeled SortOrder');
+            var limit = options.Limit === undefined ? options.limit : options.Limit;
+            if (limit !== undefined && (typeof limit !== 'number' || limit < 0 || limit % 1 !== 0)) throw new Error('Unmodeled Limit');
+            var seasonId = options.SeasonId === undefined ? options.seasonId : options.SeasonId;
+            var userId = options.UserId || options.userId || currentUserId;
+            var candidates = EPISODES.filter(function (episode) { return episode.SeriesId === seriesId; });
+            if (seriesId === PAW_PATROL_ID) candidates = candidates.concat(VIRTUAL_EPISODES);
+            // INFERRED from the generated Show API documentation, not measured
+            // by the supplied live-server probes: SeasonId scopes this response.
+            if (seasonId !== undefined) candidates = candidates.filter(function (episode) { return episode.SeasonId === seasonId; });
+            // INFERRED split: all 129 measured placeholders are missing, and
+            // the final 29 are also classed as unaired solely so both switches
+            // have independently observable behavior. That split was not probed.
+            if (options.IsMissing === false) candidates = candidates.filter(function (episode) { return episode.LocationType !== 'Virtual'; });
+            if (options.IsMissing === true) candidates = candidates.filter(function (episode) { return episode.LocationType === 'Virtual'; });
+            if (options.IsVirtualUnaired === false) candidates = candidates.filter(function (episode) {
+                return !/^paw-virtual-(10[1-9]|1[12][0-9])$/.test(episode.Id);
+            });
+            var total = candidates.length;
+            if (limit !== undefined) candidates = candidates.slice(0, limit);
+            return Promise.resolve({ Items: candidates.map(function (episode) {
+                return projectShowFields(withUserData(episode, userId), options.Fields);
+            }), TotalRecordCount: total });
+        },
+        // The pinned jellyfin-web ApiClient and Jellyfin's generated Show API
+        // establish this endpoint's series scoping and query-result shape.
+        // INFERRED: seasons are returned in IndexNumber order; this ordering
+        // was not measured on the household server.
+        getSeasons: function (seriesId, options) {
+            options = options || {};
+            validateShowOptions('getSeasons', options, ['UserId', 'userId', 'Fields']);
+            if (!SERIES.some(function (series) { return series.Id === seriesId; })) throw new Error('Unknown seriesId');
+            var userId = options.UserId || options.userId || currentUserId;
+            var seasons = SEASONS.filter(function (season) { return season.SeriesId === seriesId; })
+                .sort(function (a, b) { return a.IndexNumber - b.IndexNumber; });
+            return Promise.resolve({ Items: seasons.map(function (season) {
+                return projectShowFields(withUserData(season, userId), options.Fields);
+            }), TotalRecordCount: seasons.length });
+        },
         // The single-item endpoint, and the only place the full BaseItemDto
         // exists. MEASURED: GET /Users/{id}/Items/{itemId} with NO Fields
         // parameter is 17,153 bytes and already carries Overview,
         // MediaStreams, LocalTrailerCount and RemoteTrailers -- so no field
         // projection here, unlike getItems above.
         getItem: function (userId, itemId) {
-            var item = FOLDERS.concat(MEDIA).filter(function (entry) { return entry.Id === itemId; })[0];
+            var item = FOLDERS.concat(MEDIA, VIRTUAL_EPISODES).filter(function (entry) { return entry.Id === itemId; })[0];
             return item ? Promise.resolve(withUserData(item, userId)) : Promise.reject(new Error('item not found'));
         },
         getLocalTrailers: function (userId, itemId) {
-            var item = FOLDERS.concat(MEDIA).filter(function (entry) { return entry.Id === itemId; })[0];
+            var item = FOLDERS.concat(MEDIA, VIRTUAL_EPISODES).filter(function (entry) { return entry.Id === itemId; })[0];
             if (!item || !item.LocalTrailerCount) return Promise.resolve([]);
             return Promise.resolve([{ Id: itemId + '-trailer', Name: item.Name + ' - Trailer', Type: 'Trailer', ServerId: SERVER_ID }]);
         },
