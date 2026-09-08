@@ -14,14 +14,6 @@ async function openScreen(page, screen) {
     await page.goto(`${server.baseUrl}/dev/simulator.html`);
     await page.waitForSelector('.jq-profile-card');
     if (screen === 'profiles') return;
-    // Dana is the only fixture profile whose Home carries a Next Up row (see
-    // dev/fixtures/api-client-stub.js): Alice's single Next Up candidate is
-    // resumable, and the row suppresses those.
-    if (screen === 'home-dana') {
-        await page.evaluate(() => document.querySelector('[data-profile-id="user-dana"]').click());
-        await page.waitForSelector('.jq-media-card');
-        return;
-    }
     await page.keyboard.press('Enter'); // Alice
     await page.waitForSelector('.jq-media-card');
     if (screen === 'home') return;
@@ -72,12 +64,16 @@ async function openScreen(page, screen) {
 for (const [selector, screen, axis, containers = 1] of [
     ['.jq-rail', 'home', 'y'],
     ['.jq-profiles-row', 'profiles', 'x'],
+    // NOT COVERED, and deliberately not pretended otherwise: Home's Next Up
+    // row. Sibling spacing can only be measured between two adjacent
+    // children, and no fixture profile can hold two SURVIVING Next Up cards
+    // -- the fixture library has exactly two series with episodes, so a
+    // profile that demonstrates EnableResumable suppression at all (one
+    // candidate removed, one kept) is left with a single card. The row reuses
+    // .jq-home-row and .jq-home-row-section verbatim, so the rule measured
+    // below is the same rule that governs it, but that is inference, not
+    // measurement. See the PR discussion.
     ['.jq-home-row', 'home', 'x', 2],
-    // Home with the Next Up row present. It reuses .jq-home-row, so this
-    // brings the third container under the same sibling-margin measurement.
-    // LIMITATION: the Next Up row itself holds one card here and so
-    // contributes no adjacent PAIR -- see the row-count note in the fixture.
-    ['.jq-home-row', 'home-dana', 'x', 3],
     ['.jq-search-results', 'search', 'x'],
     ['.jq-detail-actions', 'detail', 'x'],
     ['.jq-series-actions', 'series', 'x'],

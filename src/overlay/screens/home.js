@@ -26,14 +26,19 @@
             // through", then "look at what is new".
             //
             // This is the LIBRARY-WIDE /Shows/NextUp call -- no SeriesId --
-            // and it is NOT the Series screen's Continue. MEASURED against
-            // the household's Jellyfin 10.11.11: Series Continue plays the
-            // episode AFTER the in-progress one, while library-wide Next Up
-            // returns the IN-PROGRESS EPISODE ITSELF (Pixel Move came back at
-            // PlayedPercentage 66.2). So these cards route to Episode Detail
-            // like every other episode card here, and Detail's own
-            // Resume/Play/Start Over do the right thing per item. There is
-            // deliberately no second selection algorithm in this screen.
+            // and it does NOT pick what the Series screen's Continue picks.
+            // Two different things, only one of them measured:
+            //   MEASURED, of the ENDPOINT -- library-wide Next Up returns the
+            //     IN-PROGRESS EPISODE ITSELF (Pixel Move came back at
+            //     PlayedPercentage 66.2), not the one after it.
+            //   APPLICATION behaviour, not an endpoint property -- the Series
+            //     screen's Continue advances past the in-progress episode
+            //     because series.js:424 computes episodeAfter() client-side
+            //     from the episode list. The endpoint is not consulted for it.
+            // So these cards route to Episode Detail like every other episode
+            // card here, and Detail's own Resume/Play/Start Over do the right
+            // thing per item. There is deliberately no second selection
+            // algorithm in this screen.
             //
             // Sent, and MEASURED as HONOURED: UserId, Limit, EnableRewatching,
             // EnableResumable.
@@ -54,8 +59,10 @@
             //    3 items /  5,433 bytes / sha b18b27a7 -> 1 /  1,830 / 170d3e99
             // TotalRecordCount tracks it. It also does not mask
             // EnableRewatching: the same ids go with rewatching off or on.
-            // Upstream sends the same thing (.cache/jellyfin-web/src/
-            // components/homesections/sections/nextUp.ts:32).
+            // SOURCE-CONFIRMED separately, and only this far: upstream's home
+            // section SENDS the same switch (.cache/jellyfin-web/src/
+            // components/homesections/sections/nextUp.ts:32). What it does is
+            // established by the measurement above, not by that source.
             //
             // REJECTED ALTERNATIVE -- deduplicating against Continue
             // Watching's ids here in the client. MEASURED, it yields the same
@@ -120,7 +127,14 @@
 
         var firstCard = null;
         var pending = rows.map(function (row) {
-            return row.fetch().then(function (result) {
+            // Promise.resolve().then() so a fetch that throws SYNCHRONOUSLY
+            // becomes this row's rejection instead of escaping the map and
+            // taking the whole screen with it. Every row already degrades to
+            // its own "unavailable" message below; that promise was only true
+            // for a rejected promise, and a client that throws on a malformed
+            // query -- as the strict dev fixture does -- blanked Home
+            // entirely, including the rows that would have rendered.
+            return Promise.resolve().then(row.fetch).then(function (result) {
                 if (!result.Items.length) return null;
                 return renderRow(row, result.Items, callbacks);
             }).catch(function (error) {

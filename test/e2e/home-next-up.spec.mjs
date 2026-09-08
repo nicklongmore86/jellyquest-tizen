@@ -58,6 +58,36 @@ function rowIds(page, title) {
     }, title);
 }
 
+// Where the cursor is: the Home row that owns it, or the shell chrome it
+// escaped to. Named rather than id-based so a trace reads like the traversal.
+function cursor(page) {
+    return page.evaluate(() => {
+        const active = document.activeElement;
+        if (!active || active === document.body) return { row: 'NOWHERE', id: null };
+        const section = active.closest ? active.closest('.jq-home-row-section') : null;
+        return {
+            row: section
+                ? section.querySelector('.jq-home-row-heading').textContent
+                : (active.className || '').indexOf('jq-rail-item') !== -1 ? 'RAIL' : 'OFF-SCREEN',
+            id: active.getAttribute('data-item-id'),
+        };
+    });
+}
+
+function homeGeometry(page) {
+    return page.evaluate(() => {
+        const screen = document.querySelector('.jq-home-screen');
+        return {
+            scrollRange: screen.scrollHeight - screen.clientHeight,
+            scrollTop: screen.scrollTop,
+            rows: Array.from(document.querySelectorAll('.jq-home-row-section'), (section) => ({
+                title: section.querySelector('.jq-home-row-heading').textContent,
+                cardHeight: Math.round(section.querySelector('.jq-media-card').getBoundingClientRect().height),
+            })),
+        };
+    });
+}
+
 // ---- Fixture contract -------------------------------------------------
 
 test('the fixture models a library-wide Next Up call and keeps the per-series one working', async () => {
@@ -275,7 +305,7 @@ test('a resumable episode already on Continue Watching does not come back in Nex
     // 15) and 67% of the restricted profile's (2 of 3) were duplicates of
     // Continue Watching cards.
     await signIn(page, 'user-dana');
-    assert.deepEqual(await rowIds(page, 'Continue Watching'), ['episode-523']);
+    assert.deepEqual(await rowIds(page, 'Continue Watching'), ['movie-6', 'episode-523']);
     assert.deepEqual(await rowIds(page, 'Next Up'), ['episode-114'],
         'the resumable episode must be suppressed, and nothing substituted for it');
     const continueWatching = await rowIds(page, 'Continue Watching');
@@ -305,6 +335,10 @@ test('a profile whose only Next Up candidate is resumable renders no row at all'
 }));
 
 test('Home asks for Next Up user-scoped, bounded, resumable-suppressed, and without the ignored options', async () => withPage(async (page) => {
+    // Records the options BEFORE calling through, and waits on the RECORD
+    // rather than on a rendered row. A wrong query makes the strict fixture
+    // throw, which aborts Home's render -- so a test that synchronised on a
+    // heading would report that as a timeout and never reach this assertion.
     await page.evaluate(() => {
         window.__nextUpCalls = [];
         const real = window.ApiClient.getNextUpEpisodes.bind(window.ApiClient);
@@ -313,7 +347,11 @@ test('Home asks for Next Up user-scoped, bounded, resumable-suppressed, and with
             return real(options);
         };
     });
-    await signIn(page, 'user-dana');
+    await page.evaluate(() => document.querySelector('[data-profile-id="user-dana"]').click());
+    await page.waitForSelector('.jq-shell');
+    // Flush the turn Home issues its fetches in, then read once. Not a wait:
+    // "the row was never requested at all" must fail as an assertion too.
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
     assert.deepEqual(await page.evaluate(() => window.__nextUpCalls), [
         { UserId: 'user-dana', Limit: 8, EnableResumable: false, EnableRewatching: false },
     ]);
@@ -334,9 +372,14 @@ test('a Next Up card routes to Episode Detail, exactly as Continue Watching does
 
 test('a Next Up episode with no still of its own falls back to the parent backdrop', async () => withPage(async (page) => {
     await signIn(page, 'user-dana');
+    // Synchronise on the render, then ASSERT the row and its card with
+    // non-waiting DOM reads, so an absent row fails by assertion here rather
+    // than by timing out on an image that was never going to appear.
+    assert.deepEqual(await headings(page), ['Continue Watching', 'Next Up', 'Recently Added']);
+    assert.deepEqual(await rowIds(page, 'Next Up'), ['episode-114']);
     const nextUp = page.locator('.jq-home-row-section').nth(1);
-    assert.equal(await nextUp.locator('.jq-home-row-heading').textContent(), 'Next Up');
     const card = nextUp.locator('[data-item-id="episode-114"]');
+    // Only the decode is genuinely asynchronous, and only this wait remains.
     await card.locator('img').evaluate((img) => img.complete && img.naturalWidth > 0
         ? null : new Promise((resolve) => { img.onload = resolve; }));
     const image = await card.locator('img').evaluate((img) =>
@@ -394,7 +437,7 @@ test('a failing Next Up degrades to a visible message and leaves the other rows 
     const message = page.locator('.jq-home-empty');
     assert.equal(await message.textContent(), 'Next Up is unavailable right now.');
     await assertPainted(message);
-    assert.deepEqual(await rowIds(page, 'Continue Watching'), ['episode-523']);
+    assert.deepEqual(await rowIds(page, 'Continue Watching'), ['movie-6', 'episode-523']);
     assert.ok((await rowIds(page, 'Recently Added')).length > 0);
 }));
 
@@ -405,7 +448,13 @@ test('row order is fixed by the screen, not by which fetch resolves first', asyn
         await withPage(async (page) => {
             await page.evaluate(() => document.querySelector('[data-profile-id="user-dana"]').click());
             await page.waitForSelector('.jq-shell');
-            await page.waitForFunction(() => window.__release.length > 0);
+            // Flush the turn Home's fetches are issued in, then ASSERT that
+            // the deferral actually happened. Waiting for it instead would
+            // report "the row was never requested" as a timeout.
+            await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+            const deferred = await page.evaluate(() => window.__release.length);
+            assert.ok(deferred > 0,
+                `the ${slow} request must have been made and held: ${deferred} deferred`);
             await page.evaluate(() => window.__release.splice(0).forEach((release) => release()));
             await page.waitForSelector('.jq-media-card');
             assert.deepEqual(await headings(page), ['Continue Watching', 'Next Up', 'Recently Added'],
@@ -432,7 +481,7 @@ test('row order is fixed by the screen, not by which fetch resolves first', asyn
 test('the new row does not move first-card autofocus, and Down from it reaches Next Up', async () => withPage(async (page) => {
     await signIn(page, 'user-dana');
     await page.waitForSelector('.jq-media-card');
-    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'episode-523',
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-6',
         'autofocus stays on the first Continue Watching card');
     await assertPainted(page.locator(':focus'));
 
@@ -448,7 +497,7 @@ test('the new row does not move first-card autofocus, and Down from it reaches N
     await assertPainted(page.locator(':focus'));
 
     await page.keyboard.press('ArrowUp');
-    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'episode-523');
+    assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-6');
 }));
 
 test('a profile whose Next Up is empty still autofocuses a painted first card', async () => withPage(async (page) => {
@@ -456,4 +505,68 @@ test('a profile whose Next Up is empty still autofocuses a painted first card', 
     await page.waitForSelector('.jq-media-card');
     assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-1');
     await assertPainted(page.locator(':focus'));
+}));
+
+test('walking DOWN all three rows and back UP returns to Continue Watching', async () => withPage(async (page) => {
+    // The third up-traversal defect this codebase has had (see PR #21 and
+    // PR #25). Each one was invisible until a test used a geometry where
+    // stranding was structurally possible, so the preconditions that make it
+    // possible are asserted here rather than assumed -- a future fixture that
+    // flattens Home would fail this test instead of passing it vacuously.
+    await signIn(page, 'user-dana');
+    await page.waitForSelector('.jq-media-card');
+
+    const geometry = await homeGeometry(page);
+    assert.deepEqual(geometry.rows.map((row) => row.title),
+        ['Continue Watching', 'Next Up', 'Recently Added'], 'this profile must have three rows');
+    assert.ok(geometry.scrollRange > 0,
+        `Home must genuinely overflow, or nothing can strand: range ${geometry.scrollRange}px`);
+    assert.equal(geometry.scrollTop, 0, 'a freshly rendered Home starts at the top');
+    const heights = geometry.rows.map((row) => row.cardHeight);
+    assert.ok(heights[1] < heights[0],
+        `the Next Up row must be SHORTER than the row above it -- ${heights.join('/')}px -- `
+        + 'because a reveal sized for the shorter row is what fails to uncover the taller one');
+
+    const trace = [await cursor(page)];
+    for (const key of ['ArrowDown', 'ArrowDown', 'ArrowUp', 'ArrowUp']) {
+        await page.keyboard.press(key);
+        trace.push(await cursor(page));
+    }
+    assert.deepEqual(trace.map((step) => step.row), [
+        'Continue Watching', 'Next Up', 'Recently Added', 'Next Up', 'Continue Watching',
+    ], 'the walk down must retrace exactly, and never leave the screen for the rail');
+
+    // The descent has to have actually scrolled, or the return trip never
+    // faced the condition that strands it.
+    assert.ok(trace[2].row === 'Recently Added');
+    assert.equal(trace[4].id, trace[0].id, 'the round trip must end on the card it started from');
+    assert.equal((await homeGeometry(page)).scrollTop, 0,
+        'returning to the first row must scroll Home back to the top');
+    await assertPainted(page.locator(':focus'));
+}));
+
+test('the descent scrolls Home, and the return trip un-scrolls it', async () => withPage(async (page) => {
+    // Separated from the traversal above so a failure says WHICH half broke.
+    await signIn(page, 'user-dana');
+    await page.waitForSelector('.jq-media-card');
+    const scrollTop = () => page.evaluate(() => document.querySelector('.jq-home-screen').scrollTop);
+
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowDown');
+    const atBottom = await scrollTop();
+    assert.ok(atBottom > 0, `reaching the last row must scroll Home: scrollTop ${atBottom}px`);
+
+    await page.keyboard.press('ArrowUp');
+    const midway = await scrollTop();
+    assert.ok(midway < atBottom,
+        `returning up must give scroll back so the row above is uncovered: ${midway}px vs ${atBottom}px`);
+    // The card in the row ABOVE the cursor must be fully on screen, because
+    // the polyfill's hitTest() rejects a candidate whose top is negative
+    // before it considers how much of it is visible.
+    const above = await page.evaluate(() => {
+        const sections = document.querySelectorAll('.jq-home-row-section');
+        return Math.round(sections[0].querySelector('.jq-media-card').getBoundingClientRect().top);
+    });
+    assert.ok(above >= 0,
+        `the row above must not sit at a negative offset, or it stops being a candidate: top ${above}px`);
 }));

@@ -1981,33 +1981,105 @@
         if (!scrollsX && !scrollsY) return;
         var port = container.getBoundingClientRect();
         var rect = element.getBoundingClientRect();
+        // Both axes' neighbours are measured BEFORE either offset is written:
+        // assigning a scroll offset dirties layout, and reading afterwards
+        // would both force a second reflow and measure geometry mid-move.
+        var acrossX = scrollsX ? neighbours(container, element, true) : null;
+        var acrossY = scrollsY ? neighbours(container, element, false) : null;
         if (scrollsX) {
             // clientLeft/clientTop discount a border, which offsets the
             // scrollport from the border box getBoundingClientRect gives.
             var portLeft = port.left + container.clientLeft;
             container.scrollLeft = revealOffset(
                 container.scrollLeft, rect.left, rect.right,
-                portLeft, portLeft + container.clientWidth
+                portLeft, portLeft + container.clientWidth, acrossX
             );
         }
         if (scrollsY) {
             var portTop = port.top + container.clientTop;
             container.scrollTop = revealOffset(
                 container.scrollTop, rect.top, rect.bottom,
-                portTop, portTop + container.clientHeight
+                portTop, portTop + container.clientHeight, acrossY
             );
         }
+    }
+
+    // The nearest focusable CANDIDATE on each side of `element` along one
+    // axis. hitTest() judges candidates, not boxes in general, so
+    // `.jq-focusable` is the right population -- and measuring them is the
+    // whole point: see revealMargin.
+    //
+    // What each side reports differs because the two rules differ. Behind the
+    // cursor, rule 1 needs the neighbour's leading edge on screen, so what
+    // matters is the DISTANCE back to it -- which carries the neighbour's own
+    // extent AND whatever separates the two, and a row separation is not a
+    // card separation (76px between Home's rows against 20px inside one).
+    // Ahead of the cursor, rule 2 needs a point one tenth into the neighbour,
+    // so what matters there is its SIZE.
+    //
+    // Only runs for a container that actually scrolls, so the walk is over
+    // one screen's cards at a time, once per key press, with no writes
+    // interleaved to force a reflow mid-loop.
+    function neighbours(container, element, horizontal) {
+        var rect = element.getBoundingClientRect();
+        var start = horizontal ? rect.left : rect.top;
+        var end = horizontal ? rect.right : rect.bottom;
+        var found = { leadDistance: null, trailSize: null };
+        var leadEdge = null;
+        var trailEdge = null;
+        var candidates = container.querySelectorAll('.jq-focusable');
+        for (var i = 0; i < candidates.length; i++) {
+            var other = candidates[i];
+            if (other === element) continue;
+            var box = other.getBoundingClientRect();
+            // A candidate with no box at all is not one hitTest() could pick,
+            // and its all-zero rect would otherwise read as sitting at the
+            // very start of the axis.
+            if (!box.width && !box.height) continue;
+            var otherStart = horizontal ? box.left : box.top;
+            var otherEnd = horizontal ? box.right : box.bottom;
+            if (otherEnd <= start) {
+                if (leadEdge === null || otherEnd > leadEdge) {
+                    leadEdge = otherEnd;
+                    found.leadDistance = start - otherStart;
+                }
+            } else if (otherStart >= end) {
+                if (trailEdge === null || otherStart < trailEdge) {
+                    trailEdge = otherStart;
+                    found.trailSize = horizontal ? box.width : box.height;
+                }
+            }
+        }
+        return found;
     }
 
     // How much room to keep on each side of an element of `size` along one
     // axis, given `spare` px of scrollport left over once the element itself
     // is placed. See "WHAT THE POLYFILL NEEDS TO SEE" above for why `lead`
-    // covers a whole neighbour and `trail` only a tenth of one; rows and
-    // grids here are uniform, so the focused element's own size stands in
-    // for its neighbour's.
-    function revealMargin(size, spare) {
-        var lead = size + GAP_PX;
-        var trail = GAP_PX + size / 10;
+    // covers a whole neighbour and `trail` only a tenth of one.
+    //
+    // `across` carries what neighbours() measured on each side. Both terms
+    // used to be derived from the focused element's OWN size, on the premise
+    // that "rows and grids here are uniform" -- and that premise died when
+    // Home grew a third row. Home stacks a 204px episode row between two
+    // 410px poster rows, separated by 76px of heading and section margin, so
+    // walking DOWN the stack and back UP left the poster row above spanning
+    // y = -176 upward. A lead computed as 204 + 64 cannot reveal a neighbour
+    // that starts 486px back, and hitTest() rejects a candidate whose top is
+    // negative before it looks at how much of it is on screen -- so focus
+    // left the screen for the rail instead of returning to Continue Watching.
+    //
+    // A uniform stack measures its own geometry back, so nothing else in the
+    // overlay changes shape: `lead` becomes size + spacing + GAP_PX where it
+    // was size + GAP_PX (20px more reveal inside a row, the spacing that was
+    // always there), and `trail` is unchanged wherever the neighbour ahead is
+    // the same size. `size` remains the fallback for an element with no
+    // candidate on that side.
+    function revealMargin(size, spare, across) {
+        var leadDistance = across && across.leadDistance !== null ? across.leadDistance : size;
+        var trailSize = across && across.trailSize !== null ? across.trailSize : size;
+        var lead = leadDistance + GAP_PX;
+        var trail = GAP_PX + trailSize / 10;
         // Both margins and the element itself have to fit inside the
         // scrollport. When they cannot, give up the trailing margin first --
         // it is the one asking for the least -- and then the leading one.
@@ -2025,9 +2097,9 @@
     // browser clamps whatever comes back to the scrollable range, which is
     // also what carries the last element in a row all the way to the end:
     // its trailing margin asks for more scroll than exists.
-    function revealOffset(offset, start, end, portStart, portEnd) {
+    function revealOffset(offset, start, end, portStart, portEnd, across) {
         var size = end - start;
-        var margin = revealMargin(size, (portEnd - portStart) - size);
+        var margin = revealMargin(size, (portEnd - portStart) - size, across);
         var lowest = offset + (end - portEnd) + margin.trail;
         var highest = offset + (start - portStart) - margin.lead;
         // revealMargin() keeps the range non-empty whenever the element
@@ -2776,14 +2848,19 @@
             // through", then "look at what is new".
             //
             // This is the LIBRARY-WIDE /Shows/NextUp call -- no SeriesId --
-            // and it is NOT the Series screen's Continue. MEASURED against
-            // the household's Jellyfin 10.11.11: Series Continue plays the
-            // episode AFTER the in-progress one, while library-wide Next Up
-            // returns the IN-PROGRESS EPISODE ITSELF (Pixel Move came back at
-            // PlayedPercentage 66.2). So these cards route to Episode Detail
-            // like every other episode card here, and Detail's own
-            // Resume/Play/Start Over do the right thing per item. There is
-            // deliberately no second selection algorithm in this screen.
+            // and it does NOT pick what the Series screen's Continue picks.
+            // Two different things, only one of them measured:
+            //   MEASURED, of the ENDPOINT -- library-wide Next Up returns the
+            //     IN-PROGRESS EPISODE ITSELF (Pixel Move came back at
+            //     PlayedPercentage 66.2), not the one after it.
+            //   APPLICATION behaviour, not an endpoint property -- the Series
+            //     screen's Continue advances past the in-progress episode
+            //     because series.js:424 computes episodeAfter() client-side
+            //     from the episode list. The endpoint is not consulted for it.
+            // So these cards route to Episode Detail like every other episode
+            // card here, and Detail's own Resume/Play/Start Over do the right
+            // thing per item. There is deliberately no second selection
+            // algorithm in this screen.
             //
             // Sent, and MEASURED as HONOURED: UserId, Limit, EnableRewatching,
             // EnableResumable.
@@ -2804,8 +2881,10 @@
             //    3 items /  5,433 bytes / sha b18b27a7 -> 1 /  1,830 / 170d3e99
             // TotalRecordCount tracks it. It also does not mask
             // EnableRewatching: the same ids go with rewatching off or on.
-            // Upstream sends the same thing (.cache/jellyfin-web/src/
-            // components/homesections/sections/nextUp.ts:32).
+            // SOURCE-CONFIRMED separately, and only this far: upstream's home
+            // section SENDS the same switch (.cache/jellyfin-web/src/
+            // components/homesections/sections/nextUp.ts:32). What it does is
+            // established by the measurement above, not by that source.
             //
             // REJECTED ALTERNATIVE -- deduplicating against Continue
             // Watching's ids here in the client. MEASURED, it yields the same
@@ -2870,7 +2949,14 @@
 
         var firstCard = null;
         var pending = rows.map(function (row) {
-            return row.fetch().then(function (result) {
+            // Promise.resolve().then() so a fetch that throws SYNCHRONOUSLY
+            // becomes this row's rejection instead of escaping the map and
+            // taking the whole screen with it. Every row already degrades to
+            // its own "unavailable" message below; that promise was only true
+            // for a rejected promise, and a client that throws on a malformed
+            // query -- as the strict dev fixture does -- blanked Home
+            // entirely, including the rows that would have rendered.
+            return Promise.resolve().then(row.fetch).then(function (result) {
                 if (!result.Items.length) return null;
                 return renderRow(row, result.Items, callbacks);
             }).catch(function (error) {

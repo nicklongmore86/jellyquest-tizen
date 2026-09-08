@@ -221,6 +221,16 @@
         //                       PlayedPercentage 66.2): an in-progress
         //                       episode is returned ITSELF.
         'user-dana': {
+            // A part-watched MOVIE as well as the episodes, so Dana's
+            // Continue Watching row is a 410px POSTER row above the 204px
+            // episode row Next Up renders. That heterogeneous stack is the
+            // real television's shape -- MEASURED, the largest profile's
+            // Continue Watching holds 13 mixed items above 8 Next Up
+            // episodes -- and it is the geometry in which walking down the
+            // rows and back up strands the cursor (see focus.js's
+            // revealMargin). A uniform fixture cannot see that class of
+            // defect at all.
+            'movie-6': { LastPlayedDate: '2026-09-10T12:00:00Z', PlaybackPositionTicks: 1500 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
             'episode-113': { LastPlayedDate: '2026-09-09T12:00:00Z', PlaybackPositionTicks: 0, Played: true, IsFavorite: false },
             'episode-523': { LastPlayedDate: '2026-09-05T12:00:00Z', PlaybackPositionTicks: 600 * TICKS_PER_SECOND, Played: false, IsFavorite: false },
         },
@@ -237,11 +247,13 @@
     // policy and is deliberately represented as fixture data instead of a
     // friendlier guessed algorithm.
     //
-    // Every entry here agrees with the library-wide table below for the same
-    // (user, series) pair, so the fixture cannot answer the same question two
-    // ways depending on which screen asked. The one modelled DIVERGENCE is
-    // Bob and Charlie, who have an answer here and none there; see the
-    // library-wide table for why.
+    // The TRANSPORT of this call is unchanged from PR #33, but the table is
+    // not: Alice and Dana gained entries so that every (user, series) pair
+    // agrees with the library-wide table below and the fixture cannot answer
+    // the same question two ways depending on which screen asked. The one
+    // modelled DIVERGENCE is Bob and Charlie, who have an answer here and
+    // none there; see the library-wide table for why, and for which half of
+    // that pair is measured and which inferred.
     var NEXT_UP = {
         'user-alice': { 'series-paw-patrol': 'episode-516' },
         'user-bob': { 'series-1': 'episode-1' },
@@ -250,22 +262,26 @@
     };
 
     // The LIBRARY-WIDE /Shows/NextUp answer -- a SEPARATE canned table, not a
-    // projection of the per-series one, because the two calls have MEASURED-
-    // different selection semantics. Measured library-wide against the
+    // projection of the per-series one. MEASURED library-wide against the
     // household's Jellyfin 10.11.11:
     //
-    //   * an in-progress episode is returned ITSELF, not the one after it
-    //     (so this is NOT the Series screen's Continue semantics);
+    //   * an in-progress episode is returned ITSELF, not the one after it.
+    //     (The Series screen shows the FOLLOWING episode, but that is
+    //     APPLICATION behaviour -- series.js:424 computes episodeAfter()
+    //     client-side -- not a second endpoint semantic. Do not read a
+    //     measured endpoint difference into it.)
     //   * with no resumable episode, the first unplayed episode after
     //     watched progress is returned;
     //   * fully watched series do not appear (rewatching disabled);
     //   * entirely untouched series do NOT appear and are NOT offered as
-    //     S1 E1 -- which is why Bob and Charlie have a per-series answer of
-    //     episode-1 above and NOTHING here. That is a modelled divergence
-    //     between the two calls, not an inconsistency: they have no playback
-    //     history at all, so the library-wide call has nothing to offer them.
-    //     INFERRED, not probed: that the per-series call is the one able to
-    //     offer a first episode.
+    //     S1 E1. That much is measured, LIBRARY-WIDE ONLY, and it is why Bob
+    //     and Charlie have NOTHING here.
+    //     INFERRED, NOT PROBED, and the weaker half of this pair: that the
+    //     PER-SERIES call answers episode-1 for those same untouched series.
+    //     That answer is canned fixture data from PR #33; no probe of the
+    //     per-series endpoint on an untouched series was made, so the
+    //     divergence between the two tables rests on an inference, not a
+    //     measurement.
     //   * ORDER is server policy -- descending MOST RECENT ACTIVITY ANYWHERE
     //     IN THE SERIES, not the returned episode's own date. Reproduced in
     //     Dana's list below.
@@ -436,8 +452,8 @@
     // NextUpDateCutoff, EnableTotalRecordCount and ParentId are honoured on
     // the real server but are NOT modelled here, because the overlay sends
     // none of them; the strict option guard rejects them until they are.
-    // DisableFirstEpisode is likewise unmodelled: MEASURED, true and false
-    // both returned the byte-identical baseline, so the fixture would be
+    // DisableFirstEpisode is likewise unmodelled: MEASURED, it had NO
+    // OBSERVABLE EFFECT in the measured state, so the fixture would be
     // inventing behaviour nobody observed.
     //
     // EnableResumable was MEASURED against the accept-and-ignore trap
