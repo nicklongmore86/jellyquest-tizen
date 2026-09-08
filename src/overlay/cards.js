@@ -200,12 +200,19 @@
     // drops to the meta line; inside a show's own page the show name is
     // already on screen, so the episode's name leads.
     //
-    // `context` is 'browse' (the default -- Home, Library, Search) or
-    // 'series'. Nothing passes 'series' in production yet: S3's Series seam
-    // is deliberately an inert placeholder and renders no episode cards;
-    // S4 supplies that caller when it builds the browser. The 'browse' branch
-    // has a real caller -- Home's Continue Watching row queries
-    // 'Movie,Episode' (screens/home.js).
+    // `context` is 'browse' (the default -- Home, Library and Search all omit
+    // it) or 'series'. BOTH branches have a production caller now, which was
+    // not true before the Series browse screen replaced the inert S3 seam:
+    // an earlier revision of this comment said nothing passed 'series' yet,
+    // and named S4 as the caller that would.
+    //
+    //   'browse'  -- Home's Continue Watching row. It is the only list query
+    //                in the app that returns Episodes at all ('Movie,Episode',
+    //                screens/home.js); Library and Search both query
+    //                'Movie,Series' and so render no episode cards, which
+    //                means they never reach the Episode branch below.
+    //   'series'  -- the Series browse screen's episode grid
+    //                (screens/series.js).
     function cardText(item, context) {
         var numbering = item.Type === 'Episode' ? episodeNumbering(item) : '';
         if (item.Type === 'Episode' && context !== 'series' && item.SeriesName) {
@@ -265,11 +272,21 @@
 
     window.JellyQuestCards = {
         createCard: createCard,
-        // Detail explicitly uses this formatter with 'browse' because Home is
-        // the only production Episode entry point today. This shares the
-        // current wording; it does not carry an opening card's context. S4
-        // must pass route context if Series-page cards should open Detail in
-        // the 'series' form.
+        // Detail explicitly uses this formatter with 'browse', and that is
+        // now a real choice rather than the only possibility: since the
+        // Series browse screen landed there are TWO production Episode entry
+        // points into Detail, not one, and an earlier revision of this
+        // comment gave "Home is the only entry point" as the reason.
+        //
+        // The behaviour is unchanged and deliberate. 'series' means "the show
+        // is already named elsewhere on this page", which is true of the
+        // Series screen and NOT true of Detail -- nothing else on the detail
+        // page carries the show's name, so the show has to lead there
+        // whichever screen the episode was opened from. So this formatter
+        // deliberately does not carry the opening card's context, and no
+        // route-context parameter is wanted. test/e2e/series-browse.spec.mjs
+        // pins it: an episode opened from the Series page still shows the
+        // show name as the Detail title and 'S2 E2 - <episode>' beside it.
         textFor: cardText
     };
 })();

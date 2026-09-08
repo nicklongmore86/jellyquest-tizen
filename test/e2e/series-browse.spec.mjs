@@ -410,6 +410,56 @@ test('a season larger than one window mounts at most a window and traverses both
     }
 });
 
+test('a season with no episodes says so and leaves a usable cursor on the selector', async () => withPage(async (page) => {
+    // The fixture models no empty season -- every one of series-1's 24 and
+    // PAW Patrol's 13 carries episodes -- so the empty response is stubbed
+    // HERE, in the spec, exactly as the ordering and windowing tests above
+    // stub theirs. dev/fixtures/api-client-stub.js is deliberately untouched;
+    // its strictness is load-bearing and this test does not need it relaxed.
+    await page.evaluate(() => {
+        window.ApiClient.getEpisodes = () => Promise.resolve({ Items: [], TotalRecordCount: 0 });
+    });
+    await openSeriesOne(page);
+    await page.waitForFunction(() =>
+        document.querySelector('.jq-series-status')?.textContent === 'No episodes in this season yet.');
+
+    assert.equal(await page.locator('.jq-series-episodes .jq-media-card').count(), 0);
+    assert.equal(await page.locator('.jq-series-status').isVisible(), true);
+    await assertPainted(page.locator('.jq-series-status'));
+
+    // A television with no console needs the message AND a way out of the
+    // state it describes: the cursor stays on the selector, so another season
+    // is one press away, and the rail is one press left of that.
+    assert.equal((await focusSnapshot(page)).className.includes('jq-series-season-button'), true);
+    await assertPainted(page.locator(':focus'));
+    assert.equal((await pressAndAssertFocus(page, 'ArrowLeft')).className.includes('jq-rail-item'), true);
+    await assertPainted(page.locator(':focus'));
+}));
+
+test('a client without the show endpoints says so and leaves a usable cursor on Back', async () => withPage(async (page) => {
+    // jellyquest.js is injected ahead of jellyfin-web's own bundle and app.js
+    // already polls for ApiClient to appear (the Phase 5 boot race), so "the
+    // client is present but does not carry the Show endpoints" is the shape
+    // this guard exists for. Removing the method reproduces it without
+    // touching the fixture.
+    await page.evaluate(() => { delete window.ApiClient.getSeasons; });
+    await renderSeriesDirectly(page, { Id: 'series-1', Name: 'Northern Stories 1', Type: 'Series' });
+    await page.waitForFunction(() =>
+        document.querySelector('.jq-series-status')?.textContent === 'Shows are unavailable right now. Try again.');
+
+    assert.equal(await page.locator('.jq-series-status').isVisible(), true);
+    await assertPainted(page.locator('.jq-series-status'));
+    assert.equal(await page.locator('.jq-series-season-button').count(), 0);
+    assert.equal(await page.locator('.jq-series-episodes .jq-media-card').count(), 0);
+
+    // This branch returns before anything is awaited, so the cursor is where
+    // the synchronous render put it: on Back, which is the only way out.
+    assert.equal((await focusSnapshot(page)).className.includes('jq-back-button'), true);
+    await assertPainted(page.locator(':focus'));
+    assert.equal((await pressAndAssertFocus(page, 'ArrowLeft')).className.includes('jq-rail-item'), true);
+    await assertPainted(page.locator(':focus'));
+}));
+
 test('a failed season request says so on screen and leaves the cursor on Back', async () => withPage(async (page) => {
     await page.evaluate(() => {
         window.ApiClient.getSeasons = () => Promise.reject(new Error('seasons unavailable'));

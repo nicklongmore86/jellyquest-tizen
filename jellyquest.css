@@ -759,10 +759,27 @@ html, body {
     display: none;
 }
 
-/* The dropdown itself. `overflow: hidden` again rather than auto: the
-   measured deepest show has 13 seasons, which fits, but a longer list has to
-   stay walkable, and focus.js scrolls this container the same way it scrolls
-   a row. */
+/* The dropdown itself. `overflow: hidden` again rather than auto: the TV has
+   no pointer, so a scrollbar is pure visible chrome, and the polyfill's own
+   isScrollable() excludes `hidden` deliberately -- which leaves the scrolling
+   to focus.js's revealFocus(), the same way it scrolls a row.
+
+   This menu DOES scroll, including at the household's deepest measured show.
+   MEASURED at a 1920x1080 viewport on the 13-season PAW Patrol menu:
+   clientHeight 784, scrollHeight 831, so 47px of scroll range, and at
+   scrollTop 0 the last option is clipped by exactly that 47px. (784 is this
+   rule's max-height plus its 32px padding either side; content-box sizing.)
+   An earlier revision of this comment claimed 13 seasons "fits" -- it does
+   not, and the figures above are what a reviewer's independent probe and a
+   re-run here both returned.
+
+   That is a layout fact, not a defect, and it is deliberately not "fixed" by
+   raising max-height: the scrolling is the mechanism that has to work for a
+   list of ANY length, and a taller box would only move the first length that
+   exercises it. MEASURED, walking the whole menu with ArrowDown: every one of
+   the 13 options is reached, and each is attached, rendering a box, and
+   unobscured at its centre point when focused -- focus.js scrolls to 27 then
+   47 as the cursor reaches Seasons 12 and 13. */
 .jq-series-season-menu {
     background: #1c1f24;
     border-radius: 10px;
