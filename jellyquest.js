@@ -3682,23 +3682,33 @@
         var bridge = window.JellyQuestRequestsBridge;
         status.textContent = 'Checking Requests for this profile…';
 
-        // What the guard in focusFirst() (focus.js) compares against when
-        // renderSearch's focus call lands, two bridge round trips from now:
-        // if the cursor has moved by then, the user moved it, and that newer
-        // intent wins.
+        // What focusFirst()'s guard (focus.js) compares against when
+        // renderSearch's focus call lands, two bridge round trips from now.
         //
-        // Captured HERE -- after every synchronous focus placement this
-        // render performs, immediately before the first await -- and not at
-        // the top of the function, because this render moves focus itself.
-        // Arriving from Retry, the button that was pressed lived inside
-        // `container` and innerHTML = '' above detached it, so
-        // document.activeElement is <body> at function entry; the
-        // focusFirst() a few lines up then finds nothing focusable in the
-        // screen yet and falls back to the rail. Capturing before that ran
-        // recorded <body>, so the settled rail focus read as the user having
-        // moved, and Retry's successful render never focused its search box.
-        // The distinction this line draws is the whole point: focus this
-        // render placed is not intent, focus that appears during the wait is.
+        // The comparison is element IDENTITY, not causation: if a DIFFERENT
+        // visible element holds focus by then, this render's autofocus is
+        // suppressed. That stands in for "the user moved on", and only
+        // stands in -- focus that leaves the captured element and returns to
+        // it is indistinguishable from focus that never moved, and an
+        // application-driven move (a modal opening, a navigation elsewhere)
+        // reads exactly like a remote key press. Those are limitations of
+        // the shared guard, not of this line, and they are worth what they
+        // cost here; nothing in this file can strengthen them.
+        //
+        // What this line does establish is the other half of the comparison:
+        // that no focus placement of THIS render's own doing falls between
+        // the capture and the check. It is taken after every synchronous
+        // focus placement the render performs and immediately before the
+        // first bridge call, and no path from here to renderSearch places
+        // focus in between. Taking it at the top of the function instead
+        // recorded a state the render then changed itself. Arriving from
+        // Retry, the pressed button is already gone -- app.js's
+        // showRequests() empties `container` before this function is ever
+        // entered -- so document.activeElement is <body> at entry, and the
+        // focusFirst() a few lines up finds nothing focusable in the
+        // half-built screen and takes focus.js's rail fallback. Captured
+        // before that ran, the fallback itself compared as a change, and a
+        // successful Retry never focused its search box.
         var focusAtRequest = document.activeElement;
 
         bridge.checkEligibility(config.bridgeUrl, config.userId, config.userName).then(function (eligible) {
