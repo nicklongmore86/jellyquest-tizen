@@ -64,7 +64,7 @@ test('fixture models root views, recursive and parent scope, type filters, bound
     }
     const episodes = all.filter(item => item.Type === 'Episode');
     assert.equal(episodes.filter(item => item.ParentBackdropImageTags.length).length, 699);
-    assert.ok(episodes.every(item => item.SeriesId && item.SeriesName && item.ParentIndexNumber && item.IndexNumber && item.ParentBackdropItemId));
+    assert.ok(episodes.every(item => item.SeriesId && item.SeriesName && item.SeasonId && item.ParentIndexNumber && item.IndexNumber && item.ParentBackdropItemId));
     // The other direction of the same principle as the option guard below:
     // the fixture must not RETURN fields the real server does not. MEASURED
     // against Jellyfin 10.11.11, a list response carries none of these; the
@@ -79,9 +79,18 @@ test('fixture models root views, recursive and parent scope, type filters, bound
     assert.ok(fullMovie.Overview);
     assert.equal(fullMovie.LocalTrailerCount, 1);
     assert.equal(fullMovie.MediaStreams.filter(stream => stream.Type === 'Audio').length, 2);
+    assert.deepEqual(Array.from(fullMovie.MediaStreams, stream => stream.Index), [2, 5, 9, 12]);
     const remoteOnly = await api.getItem('user-alice', 'movie-2');
     assert.equal(remoteOnly.LocalTrailerCount, 0);
     assert.equal(remoteOnly.RemoteTrailers.length, 1);
+    for (const id of ['series-paw-patrol', 'season-25', 'episode-355']) {
+        const fullItem = await api.getItem('user-alice', id);
+        assert.ok(fullItem.Overview, `${id} single-item fetch must be rich`);
+        assert.equal(fullItem.LocalTrailerCount, 0);
+    }
+    const fullEpisode = await api.getItem('user-alice', 'episode-355');
+    assert.deepEqual(Array.from(fullEpisode.MediaStreams, stream => stream.Index), [3, 8]);
+    assert.equal(fullEpisode.MediaSources.length, 1);
 
     // StartIndex used to be in the rejection list below. The Library screen
     // now sends it, so the fixture models it -- and modelling it means
@@ -108,6 +117,79 @@ test('fixture models root views, recursive and parent scope, type filters, bound
         { StartIndex: '1' }, { StartIndex: 1.5 }, { StartIndex: -1 }, { StartIndex: null }]) {
         assert.throws(() => api.getItems('user-alice', query), /Unmodeled/);
     }
+});
+
+test('fixture models empty and deep series with honest show-endpoint semantics', async () => {
+    const context = vm.createContext({ window: {} });
+    vm.runInContext(fs.readFileSync('dev/fixtures/api-client-stub.js', 'utf8'), context);
+    const api = context.window.ApiClient;
+
+    const nhlEpisodes = await api.getEpisodes('series-nhl', { UserId: 'user-alice' });
+    assert.equal(nhlEpisodes.TotalRecordCount, 0);
+    assert.equal(nhlEpisodes.Items.length, 0);
+    const nhlSeasons = await api.getSeasons('series-nhl', { UserId: 'user-alice' });
+    assert.equal(nhlSeasons.TotalRecordCount, 0);
+
+    const pawSeasons = await api.getSeasons('series-paw-patrol', { UserId: 'user-alice' });
+    assert.equal(pawSeasons.TotalRecordCount, 13);
+    assert.deepEqual(Array.from(pawSeasons.Items, season => season.IndexNumber), Array.from({ length: 13 }, (_, index) => index + 1));
+    assert.ok(pawSeasons.Items.every(season => season.ServerId && season.Type === 'Season' && !('Overview' in season)));
+    const richSeason = await api.getSeasons('series-paw-patrol', { UserId: 'user-alice', Fields: 'Overview' });
+    assert.ok(richSeason.Items.every(season => season.Overview));
+
+    const naive = await api.getEpisodes('series-paw-patrol', { UserId: 'user-alice' });
+    assert.equal(naive.TotalRecordCount, 475);
+    assert.equal(naive.Items.filter(episode => episode.LocationType === 'Virtual').length, 129);
+    assert.ok(naive.Items.every(episode => episode.ServerId && !('Overview' in episode) && !('MediaStreams' in episode)));
+    const diskOnly = await api.getEpisodes('series-paw-patrol', {
+        UserId: 'user-alice', IsMissing: false, IsVirtualUnaired: false
+    });
+    assert.equal(diskOnly.TotalRecordCount, 346);
+    assert.equal(diskOnly.Items.length, 346);
+    assert.equal(diskOnly.Items.filter(episode => !episode.ImageTags.Primary).length, 92);
+    assert.equal((await api.getEpisodes('series-paw-patrol', { UserId: 'user-alice', IsVirtualUnaired: false })).TotalRecordCount, 446);
+    assert.equal((await api.getEpisodes('series-paw-patrol', { UserId: 'user-alice', IsMissing: true, IsVirtualUnaired: false })).TotalRecordCount, 100);
+    const firstSeason = await api.getEpisodes('series-paw-patrol', {
+        UserId: 'user-alice', SeasonId: 'season-25', IsMissing: false, IsVirtualUnaired: false
+    });
+    assert.equal(firstSeason.TotalRecordCount, 27);
+    assert.ok(firstSeason.Items.every(episode => episode.SeasonId === 'season-25'));
+
+    // MEASURED server trap: this endpoint accepts these list-looking options
+    // but ignores them. The played dates sit well after the unplayed first
+    // item, so either filtering or sorting would fail these assertions.
+    const ignored = await api.getEpisodes('series-paw-patrol', {
+        UserId: 'user-alice', IsMissing: false, IsVirtualUnaired: false,
+        Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending'
+    });
+    assert.equal(ignored.Items.length, 346);
+    assert.equal(ignored.Items[0].Id, 'episode-355');
+    assert.equal(ignored.Items[0].UserData.LastPlayedDate, undefined);
+    assert.deepEqual([38, 56, 73].map(position => ignored.Items[position - 1].Id), ['episode-392', 'episode-410', 'episode-427']);
+    assert.ok([38, 56, 73].every(position => ignored.Items[position - 1].UserData.LastPlayedDate));
+    const otherValidEnums = await api.getEpisodes('series-paw-patrol', {
+        UserId: 'user-alice', IsMissing: false, Filters: 'IsFavorite', SortBy: 'Name', Fields: 'Path'
+    });
+    assert.equal(otherValidEnums.Items[0].Id, 'episode-355');
+    assert.equal(otherValidEnums.Items.length, 346);
+    const limited = await api.getEpisodes('series-paw-patrol', {
+        UserId: 'user-alice', IsMissing: false, IsVirtualUnaired: false,
+        Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending', Limit: 1
+    });
+    assert.equal(limited.Items.length, 1);
+    assert.equal(limited.Items[0].Id, 'episode-355');
+    assert.equal(limited.TotalRecordCount, 346);
+
+    const richEpisode = await api.getEpisodes('series-paw-patrol', {
+        UserId: 'user-alice', IsMissing: false, Limit: 1, Fields: 'Overview,MediaStreams,MediaSources,LocalTrailerCount'
+    });
+    assert.ok(richEpisode.Items[0].Overview);
+    assert.deepEqual(Array.from(richEpisode.Items[0].MediaStreams, stream => stream.Index), [3, 8]);
+    assert.equal(richEpisode.Items[0].LocalTrailerCount, 0);
+    for (const query of [{ Bogus: true }, { Limit: -1 }, { Filters: 'NotAFilter' }, { SortBy: 'NotASort' }, { Fields: 'NotAField' }]) {
+        assert.throws(() => api.getEpisodes('series-paw-patrol', query), /Unmodeled/);
+    }
+    assert.throws(() => api.getEpisodes('missing-series'), /Unknown seriesId/);
 });
 
 test('Home and Library use independent media queries and Library reaches beyond eight up to its own bound', async () => withPage(async page => {
@@ -217,7 +299,7 @@ test('Search paints truncation in its existing message and clears it for a narro
     await page.locator('.jq-search-input').fill('Northern');
     await page.waitForSelector('.jq-search-results .jq-media-card');
     const message = page.locator('.jq-search-empty');
-    assert.equal(await message.textContent(), 'Showing the first 24 of 44 matches — try a more specific title.');
+    assert.equal(await message.textContent(), 'Showing the first 24 of 42 matches — try a more specific title.');
     await assertPainted(message);
     assert.equal(await message.evaluate(element => element.classList.contains('jq-search-error')), false);
     await page.locator('.jq-search-input').fill('Blue Hour');
