@@ -167,3 +167,101 @@ Follow-up gates: `npx eslint .` exited 0; `npm test` passed 17 collected cases i
 `test/configuration.test.mjs`; `npm run test:e2e` passed 94 collected cases across
 `test/e2e/**/*.spec.mjs`, including the unchanged 42 spacing cases. Both bundles
 were regenerated; the CSS output is byte-identical because no styles changed.
+
+## Type-aware selection and the episode fallback (S2)
+
+Two decisions were separated, because conflating them is what produced the bug:
+
+- **Card shape** follows the item's `Type` alone, never the artwork that happens
+  to exist. `Movie`, `Series` and `Season` are 220×330 posters in 410px cards;
+  `Episode` is a 220×124 still in a 204px card. A row of episodes therefore
+  stays a row of equal boxes, and focus geometry is fixed before any decode
+  even for an item with no artwork at all. **MEASURED against the merged code:
+  `Season` was given the 124px episode still box** while every season poster is
+  2:3. That is fixed here.
+- **Which image is requested** follows what the item actually carries,
+  preferring one whose native aspect matches that shape:
+  1. the item's own `ImageTags.Primary`;
+  2. for an `Episode`, `ParentBackdropItemId` + `ParentBackdropImageTags[0]`,
+     requested as `type: 'Backdrop', index: 0` — 16:9, which fills the slot;
+  3. for an `Episode` or a `Season`, `SeriesId` + `SeriesPrimaryImageTag`;
+  4. otherwise text only.
+
+**Step 3 is live in production and must not be tidied away as dead code.**
+SOURCE-CONFIRMED against Jellyfin 10.11.11 — read from the tagged server
+source, *not* probed against the household's server —
+`SeriesPrimaryImageTag` is populated **unconditionally** for any episode or
+season with a valid series:
+`Emby.Server.Implementations/Dto/DtoService.cs:1213-1225` (episodes) and
+`:1265-1277` (seasons). So on the real server every episode reaching step 3
+carries the tag, and step 3 is the last thing between the viewer and a
+text-only card. What is synthetic is only this repo's **fixture coverage** of
+it — see the limitation below.
+
+MEASURED on the household server (Jellyfin 10.11.11; reported in the S2 brief,
+not probed from this repo): 26.4% of episodes — roughly 559 of 2118 — carry no
+`ImageTags.Primary`, while 99.86% of episodes have a parent backdrop the merged
+code never asked for. Because `getImageUrl` hardcoded `type: 'Primary'`, those
+episodes fell through to step 3 and got the **series poster**, which
+`object-fit: contain` letterboxes to 124 × 220/330 = **82.67px inside a 220px
+box**, identical on every affected episode of the same show.
+
+MEASURED in this repo, by `test/e2e/card-artwork.spec.mjs`, in the real
+simulator page against the real fixture stub and the built bundle: an episode
+that carries both fallbacks paints its parent backdrop at **220×124** — the
+whole slot — where the same card restricted to the series poster paints
+**82.67×124**. Both element boxes are 220×124 either way, which is precisely
+why the assertion measures painted content (natural size against the measured
+box) rather than the box alone.
+
+Across the 700-episode fixture the selection is now 515 own stills, 184 parent
+backdrops and 1 text-only (`episode-700`, deliberately given neither). Before
+this change the same census was 515 / 0 / 185.
+
+**FIXTURE-FIDELITY GAP, not a production claim.** `dev/fixtures/api-client-stub.js`
+projects no `SeriesPrimaryImageTag` on any item — neither on its 700 episodes
+nor on the four Primary-less PAW Patrol seasons (`season-34`…`season-37`,
+api-client-stub.js:122-131). So *in the fixture* the before-state for those 185
+episodes was text-only, and step 3 is exercised only by tests that build their
+own items (`test/e2e/card-artwork.spec.mjs`). On the household's server the
+before-state was a letterboxed series poster, because that tag is always there
+(DtoService line ranges above). The squeeze itself is reproduced directly by the
+painted-geometry test rather than by editing fixture data.
+
+Closing the gap faithfully means projecting the tag on **all** 37 seasons *and*
+all 700 episodes, which is what the same source citation implies — and that
+moves the census (`none: 1` → `0`) and its `seriesPosterTags` control. Applying
+it to the four Primary-less seasons alone would model the server as populating
+the tag only where `Primary` is missing, which the source says is false. Left as
+follow-up rather than half-done.
+
+`index: 0` is sent explicitly on the backdrop request because the tag pinned is
+`ParentBackdropImageTags[0]` and the real client turns `type`/`index` into path
+components. INFERRED, not probed: that omitting `index` would resolve to the
+same image. Sending it removes the question. Format, size bounds and quality 80
+are unchanged from the pattern above, on every image type.
+
+`dev/fixtures/api-client-stub.js`'s `getImageUrl` is now strict like the rest of
+that stub (it rejects an unmodeled option, an unmodeled image type, and an index
+on a `Primary` image) and serves a **220×124** `backdrop-1.webp` for a
+`Backdrop` request. That aspect ratio matters: a stub that returned a poster for
+every type would let a painted-geometry test pass on the very bug it models.
+The placeholder was generated with Pillow (a vertical gradient, a horizon band
+and two peaks, so landscape and portrait art are distinguishable by eye) and
+encoded to WebP at quality 80: **510 bytes**.
+
+### Contextual episode labelling (Decision 3)
+
+`createCard(item, { context })` takes `'browse'` (the default) or `'series'`.
+On an `Episode` in browse context the **show's** name is the card's primary
+text and the episode's own name drops to the meta line as `S3 E12 · Name`; in
+series context the **episode's** name leads and the meta line is just `S3 E12`.
+Both text lines now truncate with an ellipsis rather than wrap, because the
+footer is a fixed 80px under a fixed artwork box and a wrapped meta line spills
+out of the card.
+
+NOT EXERCISED BY THE APP: nothing passes `'series'` yet. The series screen is
+S4's, and no screen was invented here to demonstrate the mechanism. The default
+branch does have a real caller — Home's Continue Watching row queries
+`IncludeItemTypes: 'Movie,Episode'`, so episode cards reach the television
+today. The `'series'` branch is covered by tests only.

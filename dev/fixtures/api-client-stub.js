@@ -315,15 +315,42 @@
     }
 
     var apiClient = {
+        // Strict like every other stub method: the overlay sends exactly
+        // these keys. The image TYPE now matters -- an episode without a
+        // Primary still asks for its parent's Backdrop -- and the returned
+        // placeholder must have that type's real ASPECT RATIO, or a test
+        // measuring painted geometry would be measuring a poster either way
+        // and would pass on the squeezed-poster bug this models.
         getImageUrl: function (itemId, options) {
-            // Unknown/parent IDs reuse a real placeholder instead of a NaN path.
-            var match = /^movie-([1-9][0-9]*)$/.exec(String(itemId || ''));
-            var number = match ? Number(match[1]) : 1;
-            var index = isFinite(number) ? (number - 1) % 3 + 1 : 1;
+            options = options || {};
+            var modeled = ['type', 'index', 'tag', 'maxWidth', 'maxHeight', 'quality', 'format'];
+            Object.keys(options).forEach(function (key) {
+                if (modeled.indexOf(key) === -1) throw new Error('Unmodeled getImageUrl option: ' + key);
+            });
+            // The real server serves many more image types (Logo, Thumb,
+            // Banner...). Only the two the app asks for are modeled, matching
+            // this stub's convention of rejecting what the app never sends.
+            if (options.type !== 'Primary' && options.type !== 'Backdrop') {
+                throw new Error('Unmodeled image type: ' + options.type);
+            }
+            // The real client turns type/index into path components, so index
+            // is only meaningful for the multi-image types; Primary has none.
+            if (options.index !== undefined && options.type !== 'Backdrop') {
+                throw new Error('Unmodeled index on a ' + options.type + ' image');
+            }
+            if (options.index !== undefined && (typeof options.index !== 'number' || options.index < 0 || options.index % 1 !== 0)) {
+                throw new Error('Unmodeled index');
+            }
             var query = Object.keys(options).map(function (key) {
                 return encodeURIComponent(key) + '=' + encodeURIComponent(options[key]);
             }).join('&');
-            return '/dev/fixtures/artwork/poster-' + index + '.webp?' + query;
+            // 220x124, so a backdrop fills a 16:9 still slot exactly.
+            if (options.type === 'Backdrop') return '/dev/fixtures/artwork/backdrop-1.webp?' + query;
+            // Unknown/parent IDs reuse a real placeholder instead of a NaN path.
+            var match = /^movie-([1-9][0-9]*)$/.exec(String(itemId || ''));
+            var number = match ? Number(match[1]) : 1;
+            var poster = isFinite(number) ? (number - 1) % 3 + 1 : 1;
+            return '/dev/fixtures/artwork/poster-' + poster + '.webp?' + query;
         },
         getPublicUsers: function () {
             return Promise.resolve(USERS.slice());
