@@ -7,7 +7,7 @@
     // { title } for the Library screen, which owns its query.
     function renderHome(container, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-home-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-home-screen');
 
         var focusAtRequest = document.activeElement;
         var userId = window.ApiClient.getCurrentUserId();

@@ -8,6 +8,15 @@ const server = await startServer();
 const simulatorUrl = `${server.baseUrl}/dev/simulator.html`;
 test.after(() => server.close());
 
+// Mirrors src/overlay/screens/library.js. MEASURED against
+// dev/fixtures/api-client-stub.js, the Recently Added "See All" response is 54
+// Movie+Series items -- an exact multiple of six, so the production fixture
+// alone no longer exercises a partial last row and the second test below
+// stubs one deliberately.
+const COLUMNS = 6;
+const WINDOW_SIZE = 48;
+const LIBRARY_ITEMS = 54;
+
 async function signInAsAlice(page) {
     await page.goto(simulatorUrl);
     await page.waitForSelector('.jq-profile-card');
@@ -16,7 +25,7 @@ async function signInAsAlice(page) {
     await page.waitForSelector('.jq-media-card');
 }
 
-test('library grid: full rows and a naturally partial last row both navigate correctly', async () => {
+test('library grid: the production fixture navigates across the whole windowed grid', async () => {
     const browser = await chromium.launch();
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
@@ -24,9 +33,15 @@ test('library grid: full rows and a naturally partial last row both navigate cor
         await page.evaluate(() => document.querySelector('.jq-see-all').click());
         await page.waitForSelector('.jq-library-grid .jq-media-card');
 
-        // The first 48-item window is 12 full rows; the final shift exposes
-        // the response's naturally partial row without mounting all 50.
-        assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), 48);
+        // The first 48-item window is WINDOW_SIZE / COLUMNS full rows; the
+        // final shift exposes the rest of the response without mounting all
+        // LIBRARY_ITEMS at once.
+        assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), WINDOW_SIZE);
+        assert.equal(
+            await page.locator('.jq-library-grid').evaluate((grid) => getComputedStyle(grid).gridTemplateColumns),
+            Array(COLUMNS).fill('220px').join(' '),
+            'the row arithmetic below is only meaningful against COLUMNS rendered tracks');
+        assert.ok(LIBRARY_ITEMS > WINDOW_SIZE, 'the fixture must be deeper than one window to shift it');
         assert.equal(await page.evaluate(() => document.activeElement.getAttribute('data-item-id')), 'movie-10');
         await page.keyboard.press('ArrowDown');
         const secondRowFirst = await page.evaluate(() => document.activeElement.getAttribute('data-item-id'));
@@ -37,12 +52,85 @@ test('library grid: full rows and a naturally partial last row both navigate cor
             Recursive: true, IncludeItemTypes: 'Movie,Series',
             SortBy: 'DateCreated', SortOrder: 'Descending', Limit: 50,
         }).then(result => result.Items.map(item => item.Id)));
-        for (let row = 0; row < 12; row++) await page.keyboard.press('ArrowDown');
-        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), ids[48]);
+        // The first item of the last row; presses past it are no-ops.
+        const lastRowStart = (Math.ceil(LIBRARY_ITEMS / COLUMNS) - 1) * COLUMNS;
+        for (let row = 0; row < Math.ceil(LIBRARY_ITEMS / COLUMNS); row++) await page.keyboard.press('ArrowDown');
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), ids[lastRowStart]);
         await page.keyboard.press('ArrowRight');
-        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), ids[49]);
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), ids[lastRowStart + 1]);
+        // Up lands in the same column of the row above.
         await page.keyboard.press('ArrowUp');
-        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), ids[45]);
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId),
+            ids[lastRowStart + 1 - COLUMNS]);
+    } finally {
+        await browser.close();
+    }
+});
+
+// The .jq-grid precondition is that every row is full except, naturally, the
+// last. The production fixture happens to be an exact multiple of six, so it
+// cannot exercise that on its own any more; this stubs a count that can.
+// PARTIAL_ITEMS % COLUMNS is asserted below rather than assumed, so a future
+// COLUMNS change makes this test fail loudly instead of quietly becoming a
+// second copy of the one above.
+// 58 = 9 full rows of six plus a short row of four. Deliberately not a row of
+// ONE: a single-card last row has no in-row neighbour at all, and the
+// polyfill's next-best candidate for ArrowRight there is a card on a
+// different row -- a degenerate shape that says nothing about partial rows.
+const PARTIAL_ITEMS = 58;
+
+test('library grid: a naturally partial last row is fully reachable in both directions', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await signInAsAlice(page);
+        await page.evaluate((count) => {
+            const items = [];
+            for (let i = 0; i < count; i++) {
+                items.push({ Id: 'partial-' + i, Name: 'Partial ' + i, Type: 'Movie' });
+            }
+            const getItems = window.ApiClient.getItems;
+            window.ApiClient.getItems = (user, options) => getItems(user, options).then(() => ({
+                Items: items, TotalRecordCount: items.length,
+            }));
+            window.JellyQuestLibraryScreen.render(
+                window.JellyQuestShell.getContent(),
+                { title: 'Partial row' },
+                { onSelectItem() {}, onBack() {} }
+            );
+        }, PARTIAL_ITEMS);
+        await page.waitForSelector('[data-item-id="partial-0"]');
+
+        const shortRow = PARTIAL_ITEMS % COLUMNS;
+        assert.notEqual(shortRow, 0, 'the fixture must not divide evenly, or this tests nothing');
+        assert.equal(
+            await page.locator('.jq-library-grid').evaluate((grid) => getComputedStyle(grid).gridTemplateColumns),
+            Array(COLUMNS).fill('220px').join(' '),
+            'the grid must render exactly COLUMNS 220px tracks');
+
+        const rows = Math.ceil(PARTIAL_ITEMS / COLUMNS);
+        const lastRowStart = (rows - 1) * COLUMNS;
+        for (let row = 1; row < rows; row++) await page.keyboard.press('ArrowDown');
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), 'partial-' + lastRowStart);
+
+        // Every card of the short row, and no phantom past its end.
+        for (let column = 1; column < shortRow; column++) {
+            await page.keyboard.press('ArrowRight');
+            assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId),
+                'partial-' + (lastRowStart + column));
+        }
+        assert.ok(shortRow > 1, 'the short row must have an in-row neighbour to walk');
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId),
+            'partial-' + (PARTIAL_ITEMS - 1), 'the walk must end on the last item in the library');
+
+        // ...and back up out of it, one row per press, all the way to Back.
+        for (let row = rows - 2; row >= 0; row--) {
+            await page.keyboard.press('ArrowUp');
+            assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId),
+                'partial-' + (row * COLUMNS + shortRow - 1));
+        }
+        await page.keyboard.press('ArrowUp');
+        assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-back-button')), true);
     } finally {
         await browser.close();
     }

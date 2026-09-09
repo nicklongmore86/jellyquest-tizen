@@ -71,7 +71,21 @@
     // per-season split is INFERRED, not probed), and a single-season show of
     // several hundred episodes is a shape nobody has ruled out. The window is
     // the guard for that case.
-    var COLUMNS = 4;
+    // Six 220px tracks, matching library.js -- see its constant for the
+    // measurement. Briefly: at 1920x1080 this screen has 1920 - 268 (rail)
+    // - 96 (48px padding) = 1556px of usable grid width, six tracks need
+    // 6x220 + 5x20 = 1420px and fit, seven need 1660px and overflow. Four
+    // left 616px of the content area empty, which is what the viewer
+    // reported as episode lists being "only 4 cards wide".
+    //
+    // This is the DUPLICATE library.js's header warns about. COLUMNS and the
+    // inline gridTemplateColumns below are one number in this file, but the
+    // pair of files is not -- change both together or the window arithmetic
+    // and the rendered rows come apart.
+    var COLUMNS = 6;
+    // Unchanged at six columns: the mount bound is on CARDS, so this is now
+    // eight rows of six rather than twelve rows of four. Each window shift
+    // does move COLUMNS = 6 cards instead of 4.
     var WINDOW_SIZE = 48;
     var EDGE_ROWS = 2;
 
@@ -85,7 +99,7 @@
     // }
     function renderSeries(container, item, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-series-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-series-screen');
 
         var heading = document.createElement('h1');
         heading.className = 'jq-detail-title jq-series-title';
@@ -566,13 +580,29 @@
             // [nextStart, nextEnd), so the focused node stays attached across
             // the synchronous update. Re-check this if WINDOW_SIZE, COLUMNS,
             // EDGE_ROWS or the +/- COLUMNS step changes -- and re-check
-            // library.js's copy of the same arithmetic with it.
-            // With 48/4/2: a down move requires index >= windowEnd - 8 =
-            // windowStart + 40 while nextStart is only windowStart + 4; an up
-            // move requires index < windowStart + 8 while nextEnd is
-            // (windowStart - 4) + 48 = windowStart + 44. Neither removal
-            // range can contain the focused index. Guaranteed by that
-            // arithmetic, not by a runtime assertion.
+            // library.js's copy of the same arithmetic with it. It is
+            // ARITHMETIC: nothing checks it at run time.
+            //
+            // RE-DERIVED at today's 48/6/2 values (it was 48/4/2 until the
+            // six-column change). windowStart is always a multiple of COLUMNS
+            // -- it starts at 0, steps by +/- COLUMNS, and both of
+            // moveWindow()'s clamps are multiples of COLUMNS -- so every step
+            // is exactly one visual row.
+            //
+            //   DOWN triggers at index >= windowEnd - EDGE_ROWS * COLUMNS =
+            //   windowStart + 36, while nextStart is windowStart + 6 and
+            //   nextEnd is windowStart + 54; the focused index lies in
+            //   [windowStart + 36, windowStart + 48), inside both bounds.
+            //
+            //   UP triggers at index < windowStart + EDGE_ROWS * COLUMNS =
+            //   windowStart + 12, while nextStart is windowStart - 6 and
+            //   nextEnd is (windowStart - 6) + 48 = windowStart + 42; the
+            //   focused index lies in [windowStart, windowStart + 12), again
+            //   inside both.
+            //
+            // So neither removal loop can reach the focused index. WINDOW_SIZE
+            // 48 is a multiple of COLUMNS = 6, so a window edge still falls on
+            // a row boundary.
             //
             // Unlike library.js there is no paging caller: the series arrives
             // whole and this season partition never grows, so this is the

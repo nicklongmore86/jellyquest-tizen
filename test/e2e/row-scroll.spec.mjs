@@ -33,6 +33,15 @@ test.after(() => server.close());
 // that a navigation loop fails the test instead of hanging it.
 const MAX_PRESSES = 40;
 
+// The Library/Series grid track count (src/overlay/screens/library.js). Every
+// grid fixture below is sized as a whole number of rows from it, so a change
+// to the track count re-sizes the fixtures instead of silently turning a
+// full-row walk into a ragged one.
+const COLUMNS = 6;
+// Rows the DOM window holds: WINDOW_SIZE 48 / COLUMNS. The deep fixtures
+// below must exceed this in both directions to cross a window boundary.
+const WINDOW_ROWS = 48 / COLUMNS;
+
 async function signInAsAlice(page) {
     await page.goto(simulatorUrl);
     await page.waitForSelector('.jq-profile-card');
@@ -100,8 +109,9 @@ function childIds(page, selector) {
 // than a single row cannot strand the return trip no matter how the reveal
 // margin is computed -- it would pass against a build with the bug.
 async function assertMeasuredGeometry(page, cardHeight) {
-    const measured = await page.evaluate(() => {
+    const measured = await page.evaluate((COLUMNS) => {
         const cards = document.querySelectorAll('.jq-library-grid .jq-media-card');
+        if (cards.length <= COLUMNS) throw new Error('fixture must render more than one row');
         const first = cards[0].getBoundingClientRect();
         const screen = document.querySelector('.jq-library-screen');
         return {
@@ -109,10 +119,10 @@ async function assertMeasuredGeometry(page, cardHeight) {
             height: Math.round(first.height),
             // Row pitch straight off the layout: the top-to-top distance
             // between the first card and the one directly below it.
-            pitch: Math.round(cards[4].getBoundingClientRect().top - first.top),
+            pitch: Math.round(cards[COLUMNS].getBoundingClientRect().top - first.top),
             range: screen.scrollHeight - screen.clientHeight,
         };
-    });
+    }, COLUMNS);
     assert.deepEqual({ width: measured.width, height: measured.height },
         { width: 220, height: cardHeight },
         `cards must actually render at 220x${cardHeight}, not whatever cards.css says`);
@@ -266,9 +276,9 @@ test('Library: ArrowDown reaches the bottom row of a grid taller than the screen
         // Inject a known geometry through the screen's own API request.
         // Navigation below still uses only the remote; the production grid
         // now also exceeds a screen (covered in library-search.spec.mjs).
-        await page.evaluate(() => {
+        await page.evaluate((cardCount) => {
             const items = [];
-            for (let i = 1; i <= 28; i++) items.push({ Id: 'grid-' + i, Name: 'Item ' + i, Type: 'Movie' });
+            for (let i = 1; i <= cardCount; i++) items.push({ Id: 'grid-' + i, Name: 'Item ' + i, Type: 'Movie' });
             const getItems = window.ApiClient.getItems;
             window.ApiClient.getItems = (user, options) => getItems(user, options).then(() => ({ Items: items.slice(0, options.Limit) }));
             window.JellyQuestLibraryScreen.render(
@@ -276,8 +286,16 @@ test('Library: ArrowDown reaches the bottom row of a grid taller than the screen
                 { title: 'Everything' },
                 { onSelectItem() {}, onBack() {} }
             );
-        });
+        }, 7 * COLUMNS);
         await page.waitForSelector('.jq-library-grid .jq-media-card');
+
+        // The fixture only tests anything if the grid really renders COLUMNS
+        // tracks: at a narrower track count these 7 * COLUMNS cards make more
+        // rows than intended and the id sequence below stops describing rows.
+        assert.equal(
+            await page.evaluate(() => getComputedStyle(document.querySelector('.jq-library-grid')).gridTemplateColumns),
+            Array(COLUMNS).fill('220px').join(' '),
+            'the grid must render exactly COLUMNS 220px tracks');
 
         const overflow = await page.evaluate(() => {
             const screen = document.querySelector('.jq-library-screen');
@@ -287,15 +305,16 @@ test('Library: ArrowDown reaches the bottom row of a grid taller than the screen
             `the grid must overflow vertically: ${overflow.scrollHeight} <= ${overflow.clientHeight}`);
 
         const visited = await walk(page, 'ArrowDown', viewport);
-        // 28 cards in 4 columns is 7 rows; ArrowDown from the autofocused
-        // first card must reach the first card of every one of them.
-        assert.deepEqual(visited, ['grid-1', 'grid-5', 'grid-9', 'grid-13', 'grid-17', 'grid-21', 'grid-25']);
+        // 7 * COLUMNS cards is 7 rows; ArrowDown from the autofocused first
+        // card must reach the first card of every one of them.
+        const firstOfEachRow = Array.from({ length: 7 }, (_, row) => 'grid-' + (row * COLUMNS + 1));
+        assert.deepEqual(visited, firstOfEachRow);
 
         // Back up the same way. The walk runs one step past the top row
         // onto "< Back", which is how the grid reaches it, and landing
         // there must have scrolled the screen fully home.
         const back = await walk(page, 'ArrowUp', viewport);
-        assert.deepEqual(back, ['grid-25', 'grid-21', 'grid-17', 'grid-13', 'grid-9', 'grid-5', 'grid-1', 'jq-focusable']);
+        assert.deepEqual(back, firstOfEachRow.slice().reverse().concat(['jq-focusable']));
         assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-back-button')), true);
         assert.equal(await page.evaluate(() => document.querySelector('.jq-library-screen').scrollTop), 0,
             'reaching the top of the grid must scroll the screen back to its beginning');
@@ -312,8 +331,9 @@ test('Library: ArrowDown reaches the bottom row of a grid taller than the screen
 // has 143px of range, less than the 150px pitch, so the return trip has
 // nothing to strand on and it looks fine however broken the margin is; the
 // same 7 rows at 330px have 1543px of range and stranded on card 17. These
-// use 15 rows so traversal crosses the 12-row DOM window in both directions,
-// and assert the measured scroll range.
+// use 15 rows so traversal crosses the DOM window (WINDOW_ROWS = 8 rows at
+// today's six columns, 12 at the four this grid used to have) in both
+// directions, and assert the measured scroll range.
 //
 // Card heights cover today's 130px .jq-media-card and the 330px poster and
 // 124px still that card artwork introduces. Overriding that height is
@@ -324,8 +344,9 @@ test('Library: ArrowDown reaches the bottom row of a grid taller than the screen
 // pass. Hence both a more specific selector, which cannot lose on order,
 // and assertMeasuredGeometry() below, which fails the test if the box it
 // depends on is not the box it asked for.
+const ROWS = 15;
 for (const cardHeight of [130, 330, 124]) {
-    test(`Library: ArrowUp walks a windowed 15-row grid of 220x${cardHeight} cards back to the top`, async () => {
+    test(`Library: ArrowUp walks a windowed ${ROWS}-row grid of 220x${cardHeight} cards back to the top`, async () => {
         const browser = await chromium.launch();
         const viewport = { width: 1920, height: 1080 };
         try {
@@ -344,9 +365,9 @@ for (const cardHeight of [130, 330, 124]) {
             // validates the query. Returning more than its Limit deliberately
             // models an already-in-memory result large enough to move the
             // rendering window; pagination remains outside this test.
-            await page.evaluate(() => {
+            await page.evaluate((cardCount) => {
                 const items = [];
-                for (let i = 1; i <= 60; i++) items.push({ Id: 'grid-' + i, Name: 'Item ' + i, Type: 'Movie' });
+                for (let i = 1; i <= cardCount; i++) items.push({ Id: 'grid-' + i, Name: 'Item ' + i, Type: 'Movie' });
                 const getItems = window.ApiClient.getItems;
                 window.ApiClient.getItems = (user, options) => getItems(user, options).then(() => ({ Items: items }));
                 window.JellyQuestLibraryScreen.render(
@@ -354,16 +375,27 @@ for (const cardHeight of [130, 330, 124]) {
                     { title: 'Everything' },
                     { onSelectItem() {}, onBack() {} }
                 );
-            });
+            }, ROWS * COLUMNS);
             await page.waitForSelector('.jq-library-grid .jq-media-card');
 
             await assertMeasuredGeometry(page, cardHeight);
 
-            // 60 cards in 4 columns is 15 rows; Down must cross the window
+            // PRECONDITION, not decoration. If the grid rendered fewer tracks
+            // than COLUMNS these cards would make more rows than ROWS, and if
+            // it rendered more they would make fewer -- either way the row
+            // arithmetic below would be describing a different layout.
+            assert.equal(
+                await page.evaluate(() => getComputedStyle(document.querySelector('.jq-library-grid')).gridTemplateColumns),
+                Array(COLUMNS).fill('220px').join(' '),
+                'the grid must render exactly COLUMNS 220px tracks');
+            assert.ok(ROWS > WINDOW_ROWS,
+                `the fixture must be deeper than the ${WINDOW_ROWS}-row DOM window to cross it`);
+
+            // ROWS * COLUMNS cards is ROWS rows; Down must cross the window
             // boundary and reach every one.
             const down = await walk(page, 'ArrowDown', viewport);
-            assert.equal(down.length, 15, `ArrowDown must reach all 15 rows, got ${down.join(' -> ')}`);
-            assert.equal(down[down.length - 1], 'grid-57');
+            assert.equal(down.length, ROWS, `ArrowDown must reach all ${ROWS} rows, got ${down.join(' -> ')}`);
+            assert.equal(down[down.length - 1], 'grid-' + ((ROWS - 1) * COLUMNS + 1));
 
             // ...and Up must bring the cursor all the way back, one row per
             // press, ending on "< Back" above the grid with the screen
@@ -371,7 +403,7 @@ for (const cardHeight of [130, 330, 124]) {
             // whole neighbouring row, this stranded at grid-73 with the row
             // above spanning y = -86 to y = 44.
             const up = await walk(page, 'ArrowUp', viewport);
-            assert.deepEqual(up.slice(0, 15), down.slice().reverse(),
+            assert.deepEqual(up.slice(0, ROWS), down.slice().reverse(),
                 'ArrowUp must retrace every row it came down through');
             assert.equal(await page.evaluate(() => document.activeElement.classList.contains('jq-back-button')), true,
                 'ArrowUp must finish on "< Back" above the first row');

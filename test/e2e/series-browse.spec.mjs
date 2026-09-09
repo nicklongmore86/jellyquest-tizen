@@ -12,7 +12,9 @@ const simulatorUrl = `${server.baseUrl}/dev/simulator.html`;
 test.after(() => server.close());
 
 const WINDOW_SIZE = 48;
-const COLUMNS = 4;
+// src/overlay/screens/series.js's episode-grid track count -- the duplicate
+// of library.js's. See that file's COLUMNS comment.
+const COLUMNS = 6;
 
 async function withPage(run) {
     const browser = await chromium.launch();
@@ -560,6 +562,15 @@ test('a season larger than one window mounts at most a window and traverses both
             return ids;
         };
         assert.equal((await assertWindow()).length, WINDOW_SIZE);
+        // PRECONDITION: the row arithmetic below describes this grid only if
+        // the grid renders COLUMNS tracks, and the fixture is only a windowing
+        // test if it is deeper than one window.
+        assert.equal(
+            await page.locator('.jq-series-episodes').evaluate((grid) => getComputedStyle(grid).gridTemplateColumns),
+            Array(COLUMNS).fill('220px').join(' '),
+            'the episode grid must render exactly COLUMNS 220px tracks');
+        assert.ok(Math.ceil(EPISODE_COUNT / COLUMNS) > WINDOW_SIZE / COLUMNS,
+            'the fixture season must be deeper than one mounted window');
 
         // Into the grid, then all the way down and all the way back up.
         assert.equal((await pressAndAssertFocus(page, 'ArrowDown')).id, 'deep-1');

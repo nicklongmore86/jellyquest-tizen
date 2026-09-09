@@ -8,6 +8,13 @@ import { assertSiblingSpacing, assertWrappedSpacing } from './support/spacing.mj
 const server = await startServer();
 test.after(() => server.close());
 
+// Mirrors src/overlay/screens/library.js.
+const COLUMNS = 6;
+const WINDOW_SIZE = 48;
+// MEASURED against dev/fixtures/api-client-stub.js: the Recently Added
+// "See All" library response is 54 Movie+Series items.
+const LIBRARY_ITEMS = 54;
+
 // Reach screens through the same profile, navigation, search and More actions
 // used by the existing specs. No production hooks or synthetic card elements.
 async function openScreen(page, screen) {
@@ -156,37 +163,53 @@ test('library grid retains legacy grid-gap and positive spacing on both axes', a
                 const { left, right, top, bottom, width, height } = child.getBoundingClientRect();
                 return { left, right, top, bottom, width, height };
             }));
-            assert.equal(rects.length, 48, 'the initial Library window contains 12 complete rows');
+            assert.equal(rects.length, WINDOW_SIZE,
+                `the initial Library window contains ${WINDOW_SIZE / COLUMNS} complete rows`);
+            assert.equal(
+                await page.locator('.jq-library-grid').evaluate((grid) => getComputedStyle(grid).gridTemplateColumns),
+                Array(COLUMNS).fill('220px').join(' '),
+                'the row arithmetic below is only meaningful against COLUMNS rendered tracks');
             for (const [i, rect] of rects.entries()) {
                 assert.ok(rect.width > 0 && rect.height > 0, 'Library cards must have visible geometry');
-                if (i % 4 !== 0) {
-                    assert.ok(Math.abs(rect.top - rects[i - 1].top) < 1, 'Four cards must share each line');
+                if (i % COLUMNS !== 0) {
+                    assert.ok(Math.abs(rect.top - rects[i - 1].top) < 1, 'COLUMNS cards must share each line');
                     const separation = rect.left - rects[i - 1].right;
                     assert.ok(separation > 0, `Library x separation ${separation}px must be positive`);
                 }
-                if (i >= 4) {
-                    assert.ok(Math.abs(rect.left - rects[i - 4].left) < 1, 'Library columns must align');
-                    const separation = rect.top - rects[i - 4].bottom;
+                if (i >= COLUMNS) {
+                    assert.ok(Math.abs(rect.left - rects[i - COLUMNS].left) < 1, 'Library columns must align');
+                    const separation = rect.top - rects[i - COLUMNS].bottom;
                     assert.ok(separation > 0, `Library y separation ${separation}px must be positive`);
                 }
             }
         }
-        for (let row = 0; row < 12; row++) await page.keyboard.press('ArrowDown');
+        // Enough presses to drive the window to its end from any track count;
+        // presses past the last row are no-ops.
+        for (let row = 0; row < Math.ceil(LIBRARY_ITEMS / COLUMNS); row++) await page.keyboard.press('ArrowDown');
         const rects = await page.locator('.jq-library-grid > *').evaluateAll((children) => children.map((child) => {
             const { left, right, top, bottom, width, height } = child.getBoundingClientRect();
             return { left, right, top, bottom, width, height };
         }));
-        assert.equal(rects.length, 46, 'the final Library window includes the naturally partial last row');
+        // The window start is clamped to a row boundary with Math.ceil, so the
+        // final window is LIBRARY_ITEMS minus that start: 48 of the 54 fixture
+        // items at six columns, 46 at the four this grid used to have. 54 is a
+        // multiple of six, so this fixture no longer ends in a PARTIAL row --
+        // that case is covered against a fixture chosen for it in
+        // library-search.spec.mjs and library-paging.spec.mjs, not here.
+        const finalWindow = LIBRARY_ITEMS - Math.ceil((LIBRARY_ITEMS - WINDOW_SIZE) / COLUMNS) * COLUMNS;
+        assert.equal(rects.length, finalWindow, 'the final Library window must have moved off the first row');
+        assert.notEqual(finalWindow, WINDOW_SIZE === LIBRARY_ITEMS ? finalWindow : -1,
+            'the window must actually have moved for the appended geometry to be measured');
         for (const [i, rect] of rects.entries()) {
             assert.ok(rect.width > 0 && rect.height > 0, 'Library cards must have visible geometry');
-            if (i % 4 !== 0) {
-                assert.ok(Math.abs(rect.top - rects[i - 1].top) < 1, 'Four cards must share each line');
+            if (i % COLUMNS !== 0) {
+                assert.ok(Math.abs(rect.top - rects[i - 1].top) < 1, 'COLUMNS cards must share each line');
                 const separation = rect.left - rects[i - 1].right;
                 assert.ok(separation > 0, `Library x separation ${separation}px must be positive`);
             }
-            if (i >= 4) {
-                assert.ok(Math.abs(rect.left - rects[i - 4].left) < 1, 'Library columns must align');
-                const separation = rect.top - rects[i - 4].bottom;
+            if (i >= COLUMNS) {
+                assert.ok(Math.abs(rect.left - rects[i - COLUMNS].left) < 1, 'Library columns must align');
+                const separation = rect.top - rects[i - COLUMNS].bottom;
                 assert.ok(separation > 0, `Library y separation ${separation}px must be positive`);
             }
         }

@@ -9,6 +9,9 @@ import { assertPainted } from './support/paint.mjs';
 const server = await startServer();
 test.after(() => server.close());
 
+// src/overlay/screens/library.js's grid track count.
+const COLUMNS = 6;
+
 async function withPage(run) {
     const browser = await chromium.launch();
     try {
@@ -327,28 +330,33 @@ test('Shows grid walks every row down and back up to painted Back', async () => 
     await signIn(page);
     await page.locator('.jq-nav-shows').click();
     await page.waitForSelector('.jq-library-grid .jq-media-card');
-    const traversal = await page.evaluate(() => {
+    const traversal = await page.evaluate((COLUMNS) => {
         const cards = Array.from(document.querySelectorAll('.jq-library-grid .jq-media-card'));
         const first = cards[0].getBoundingClientRect();
-        const fifth = cards[4].getBoundingClientRect();
+        const nextRow = cards[COLUMNS].getBoundingClientRect();
         const screen = document.querySelector('.jq-library-screen');
         return {
             ids: cards.map((card) => card.dataset.itemId),
-            pitch: Math.round(fifth.top - first.top),
+            pitch: Math.round(nextRow.top - first.top),
             range: screen.scrollHeight - screen.clientHeight,
+            template: getComputedStyle(document.querySelector('.jq-library-grid')).gridTemplateColumns,
         };
-    });
+    }, COLUMNS);
+    // PRECONDITION: the row arithmetic below only describes this grid if the
+    // grid really renders COLUMNS tracks.
+    assert.equal(traversal.template, Array(COLUMNS).fill('220px').join(' '),
+        'the Shows grid must render exactly COLUMNS 220px tracks');
     assert.ok(traversal.range > traversal.pitch * 5,
         `Shows must be deep enough to exercise reveal-on-Up: ${traversal.range}px range, ${traversal.pitch}px pitch`);
-    const rows = Math.ceil(traversal.ids.length / 4);
+    const rows = Math.ceil(traversal.ids.length / COLUMNS);
     for (let row = 1; row < rows; row++) {
         await page.keyboard.press('ArrowDown');
-        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), traversal.ids[row * 4]);
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), traversal.ids[row * COLUMNS]);
         await assertPainted(page.locator(':focus'));
     }
     for (let row = rows - 2; row >= 0; row--) {
         await page.keyboard.press('ArrowUp');
-        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), traversal.ids[row * 4]);
+        assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), traversal.ids[row * COLUMNS]);
         await assertPainted(page.locator(':focus'));
     }
     await page.keyboard.press('ArrowUp');

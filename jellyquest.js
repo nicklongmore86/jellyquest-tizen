@@ -2907,7 +2907,7 @@
     // { title } for the Library screen, which owns its query.
     function renderHome(container, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-home-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-home-screen');
 
         var focusAtRequest = document.activeElement;
         var userId = window.ApiClient.getCurrentUserId();
@@ -3117,12 +3117,47 @@
 (function () {
     'use strict';
 
-    var COLUMNS = 4;
-    // Twelve complete rows keep the polyfill's O(n) candidate sweep at 48
-    // cards. With 680 items in memory, real posters, the production polyfill,
-    // and 20x CPU throttling, current desktop Chromium measured 48.0ms median
-    // and 91.3ms worst over 100 ArrowDown presses. That desktop result is an
-    // optimistic lower bound, not an M63 or television measurement.
+    // Six 220px tracks with a 20px grid-gap. MEASURED at 1920x1080: the
+    // shell leaves 1920 - 268 (rail) - 96 (this screen's 48px padding) =
+    // 1556px of usable grid width. Six tracks need 6x220 + 5x20 = 1420px and
+    // fit with 136px spare; seven need 1660px and overflow. Four -- what this
+    // was -- left 616px of the content area empty, which is what the viewer
+    // reported as "only 4 cards wide".
+    //
+    // The inline gridTemplateColumns below interpolates this constant rather
+    // than repeating the number, so the track count and the window arithmetic
+    // cannot drift apart WITHIN this file. What can still drift is series.js,
+    // which carries its own copy of both -- and that matters: if the rendered
+    // track count and COLUMNS disagree, a window shift is no longer a whole
+    // number of visual rows, so cards reflow into different columns,
+    // cards[COLUMNS] in measureRowPitch() stops straddling a real row, and
+    // every virtual-padding and paging-row calculation here goes wrong. Change
+    // the two files together.
+    var COLUMNS = 6;
+    // Eight complete rows keep the polyfill's O(n) candidate sweep at 48
+    // cards -- the bound is on MOUNTED CARDS, so widening the grid from four
+    // columns to six does not raise it; it turns twelve rows of four into
+    // eight rows of six.
+    //
+    // What it does change is churn: each window shift now moves COLUMNS = 6
+    // cards instead of 4 (50% more DOM work per shift), and up to 50% more
+    // artwork is on screen per row. MEASURED before and after this change on
+    // one throttled desktop harness (680 items in memory, real posters, the
+    // production polyfill, 20x CPU throttling, 300 ArrowDown presses each,
+    // 48 mounted cards throughout):
+    //
+    //     four columns   median 63.4ms   p99  94.1ms   worst 109.9ms
+    //     six columns    median 73.9ms   p99 113.9ms   worst 126.6ms
+    //
+    // +17% at the median. These are NOT comparable to the 48.0ms/91.3ms this
+    // comment used to quote: that was a different machine, and the four-column
+    // re-measurement above is the only honest baseline for the figures beside
+    // it. READ THE LIMIT: a throttled desktop is an OPTIMISTIC LOWER BOUND for
+    // Chromium M63 on the television, not a television measurement. The worst
+    // samples straddle the 100ms budget at BOTH track counts on this harness,
+    // so six columns is NOT established to be in budget on the real hardware,
+    // by this measurement or by any arithmetic. What it is established to be
+    // is ~17% dearer than four on the only harness available.
     var WINDOW_SIZE = 48;
     var EDGE_ROWS = 2;
 
@@ -3141,9 +3176,11 @@
     // screen is never short on arrival, and (b) leaves a whole spare window
     // behind it, so the first page never needs a prefetch to have already
     // landed. 714 items become 8 requests instead of 1 truncated one. It is
-    // also a multiple of COLUMNS, so a page boundary always falls on a row
-    // boundary and the only short row is still the last one -- the .jq-grid
-    // precondition in this file's opening comment.
+    // also a multiple of COLUMNS -- 96 = 16 x 6, as 48 = 8 x 6 -- so a page
+    // boundary always falls on a row boundary and the only short row is still
+    // the last one, the .jq-grid precondition in this file's opening comment.
+    // Both divisibility facts have to be rechecked whenever COLUMNS moves;
+    // they hold at six as they did at four.
     //
     // PREFETCH_REMAINING = WINDOW_SIZE. The next page is requested once the
     // cursor comes within 48 items -- 12 ArrowDown presses -- of the end of
@@ -3244,7 +3281,7 @@
     // callbacks: { onSelectItem(item), onBack() }
     function renderLibrary(container, row, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-library-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-library-screen');
 
         var backButton = document.createElement('button');
         backButton.className = 'jq-back-button jq-focusable';
@@ -3547,22 +3584,50 @@
         // [nextStart, nextEnd), so its node stays attached throughout the
         // synchronous update. Re-check this if WINDOW_SIZE, COLUMNS,
         // EDGE_ROWS, either trigger threshold, or the +/- COLUMNS step changes.
-        // With today's 48/4/2 values, a down move requires
-        // index >= windowEnd - 8 = windowStart + 40, while nextStart is only
-        // windowStart + 4. An up move requires index < windowStart + 8, while
-        // nextEnd is (windowStart - 4) + 48 = windowStart + 44. Thus neither
-        // edge-removal loop can include the focused index. This is guaranteed
-        // by that arithmetic, not by a runtime assertion.
+        // It is ARITHMETIC, not a runtime assertion -- nothing here checks it
+        // at run time, so the re-derivation below is the whole guarantee.
+        //
+        // RE-DERIVED at today's 48/6/2 values (it was 48/4/2 until this
+        // change). windowStart is always a multiple of COLUMNS: it starts at
+        // 0, moves by +/- COLUMNS, and both clamps in moveWindow() land on
+        // multiples of COLUMNS too -- 0, and maximumStart, which is a
+        // Math.ceil(.../COLUMNS) * COLUMNS. So the row grid never shifts out
+        // of phase and each step below is exactly one visual row.
+        //
+        //   DOWN. Triggers at index >= windowEnd - EDGE_ROWS * COLUMNS =
+        //   windowStart + 48 - 12 = windowStart + 36. nextStart is only
+        //   windowStart + 6 and nextEnd is windowStart + 54, so the removal
+        //   ranges are index < windowStart + 6 and index >= windowStart + 54.
+        //   The focused index is in [windowStart + 36, windowStart + 48), i.e.
+        //   in neither.
+        //
+        //   UP. Triggers at index < windowStart + EDGE_ROWS * COLUMNS =
+        //   windowStart + 12. nextStart is windowStart - 6 and nextEnd is
+        //   (windowStart - 6) + 48 = windowStart + 42, so the removal ranges
+        //   are index < windowStart - 6 and index >= windowStart + 42. The
+        //   focused index is in [windowStart, windowStart + 12), i.e. in
+        //   neither.
+        //
+        // The margins are 30 rows-worth of index on the way down
+        // (36 vs 6) and 30 on the way up (42 vs 12) -- at four columns they
+        // were 36 vs 4 and 44 vs 8. Both shrank and both are still positive,
+        // which is the whole claim.
         //
         // Paging adds one more caller: requestNextPage() calls
         // extendWindowForward(focusedIndex()) when a page lands. That is the
-        // SAME test and the SAME +COLUMNS step as the down branch below, so
-        // the arithmetic above covers it unchanged -- the focused index is
-        // >= windowStart + 40 when it fires, nextStart is windowStart + 4, and
-        // nextEnd is windowStart + 52, so the focused card is in neither
+        // SAME test and the SAME +COLUMNS step as the down branch, so the
+        // derivation above covers it unchanged -- the focused index is
+        // >= windowStart + 36 when it fires, nextStart is windowStart + 6, and
+        // nextEnd is windowStart + 54, so the focused card is in neither
         // removal range. One step is enough to unstick downward traversal: the
         // row below the focused card is at most index + COLUMNS <=
-        // windowStart + 51, which is inside the new [nextStart, nextEnd).
+        // (windowStart + 47) + 6 = windowStart + 53, which is inside the new
+        // [nextStart, nextEnd).
+        //
+        // Two divisibility facts the rest of the screen leans on also survive
+        // the change: WINDOW_SIZE 48 and PAGE_SIZE 96 are both multiples of
+        // COLUMNS = 6, so a window edge and a page boundary each still fall on
+        // a row boundary.
         //
         // Note that it is NOT an append-only operation: moveWindow() removes
         // the COLUMNS cards that fall below the new nextStart before appending
@@ -3606,7 +3671,7 @@
     // callbacks: { onSelectItem(item) }
     function renderSearch(container, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-search-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-search-screen');
 
         var input = document.createElement('input');
         input.type = 'search';
@@ -3747,7 +3812,7 @@
     // these two calls (see app.js's onPlayTrailer).
     function renderDetail(container, item, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-detail-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-detail-screen');
 
         var episodeText = item.Type === 'Episode'
             ? window.JellyQuestCards.textFor(item, 'browse')
@@ -4116,7 +4181,21 @@
     // per-season split is INFERRED, not probed), and a single-season show of
     // several hundred episodes is a shape nobody has ruled out. The window is
     // the guard for that case.
-    var COLUMNS = 4;
+    // Six 220px tracks, matching library.js -- see its constant for the
+    // measurement. Briefly: at 1920x1080 this screen has 1920 - 268 (rail)
+    // - 96 (48px padding) = 1556px of usable grid width, six tracks need
+    // 6x220 + 5x20 = 1420px and fit, seven need 1660px and overflow. Four
+    // left 616px of the content area empty, which is what the viewer
+    // reported as episode lists being "only 4 cards wide".
+    //
+    // This is the DUPLICATE library.js's header warns about. COLUMNS and the
+    // inline gridTemplateColumns below are one number in this file, but the
+    // pair of files is not -- change both together or the window arithmetic
+    // and the rendered rows come apart.
+    var COLUMNS = 6;
+    // Unchanged at six columns: the mount bound is on CARDS, so this is now
+    // eight rows of six rather than twelve rows of four. Each window shift
+    // does move COLUMNS = 6 cards instead of 4.
     var WINDOW_SIZE = 48;
     var EDGE_ROWS = 2;
 
@@ -4130,7 +4209,7 @@
     // }
     function renderSeries(container, item, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-series-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-series-screen');
 
         var heading = document.createElement('h1');
         heading.className = 'jq-detail-title jq-series-title';
@@ -4611,13 +4690,29 @@
             // [nextStart, nextEnd), so the focused node stays attached across
             // the synchronous update. Re-check this if WINDOW_SIZE, COLUMNS,
             // EDGE_ROWS or the +/- COLUMNS step changes -- and re-check
-            // library.js's copy of the same arithmetic with it.
-            // With 48/4/2: a down move requires index >= windowEnd - 8 =
-            // windowStart + 40 while nextStart is only windowStart + 4; an up
-            // move requires index < windowStart + 8 while nextEnd is
-            // (windowStart - 4) + 48 = windowStart + 44. Neither removal
-            // range can contain the focused index. Guaranteed by that
-            // arithmetic, not by a runtime assertion.
+            // library.js's copy of the same arithmetic with it. It is
+            // ARITHMETIC: nothing checks it at run time.
+            //
+            // RE-DERIVED at today's 48/6/2 values (it was 48/4/2 until the
+            // six-column change). windowStart is always a multiple of COLUMNS
+            // -- it starts at 0, steps by +/- COLUMNS, and both of
+            // moveWindow()'s clamps are multiples of COLUMNS -- so every step
+            // is exactly one visual row.
+            //
+            //   DOWN triggers at index >= windowEnd - EDGE_ROWS * COLUMNS =
+            //   windowStart + 36, while nextStart is windowStart + 6 and
+            //   nextEnd is windowStart + 54; the focused index lies in
+            //   [windowStart + 36, windowStart + 48), inside both bounds.
+            //
+            //   UP triggers at index < windowStart + EDGE_ROWS * COLUMNS =
+            //   windowStart + 12, while nextStart is windowStart - 6 and
+            //   nextEnd is (windowStart - 6) + 48 = windowStart + 42; the
+            //   focused index lies in [windowStart, windowStart + 12), again
+            //   inside both.
+            //
+            // So neither removal loop can reach the focused index. WINDOW_SIZE
+            // 48 is a multiple of COLUMNS = 6, so a window edge still falls on
+            // a row boundary.
             //
             // Unlike library.js there is no paging caller: the series arrives
             // whole and this season partition never grows, so this is the
@@ -4731,7 +4826,7 @@
     // focusAtRequest, onRetryConfiguration }
     function renderRequests(container, config) {
         container.innerHTML = '';
-        container.className = 'jq-requests-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-requests-screen');
 
         var status = document.createElement('p');
         status.className = 'jq-requests-status';
@@ -4984,6 +5079,32 @@
 
     var contentEl = null;
 
+    // The structural classes the shell's content <main> must always carry.
+    // .jq-shell-content is what gives it `flex: 1 1 auto` (shell.css), i.e.
+    // the whole width left of the rail; without it the content box
+    // shrink-wraps its own contents and every screen hugs the left edge
+    // after the 268px rail.
+    //
+    // Every screen renderer assigns container.className outright, which is
+    // how this class was silently lost on all six of them from the first
+    // revision each was written -- MEASURED at 1920x1080 before the fix:
+    // Search and Requests 696px wide, Library and Series 1036px, Detail
+    // 733px, against a 1652px content area. Home was full width only by
+    // accident, its long horizontal rows being intrinsically wide enough to
+    // mask the loss. Renderers therefore ask for their class through
+    // contentClassName() rather than spelling the structural half out again,
+    // so a new screen cannot drop it by writing the obvious thing.
+    //
+    // NOT for the profile picker: profiles.js replaces the top-level root
+    // after the shell has been removed (app.js showProfiles), so its
+    // container never is this <main> and it centres itself instead
+    // (profiles.css).
+    var CONTENT_CLASS = 'jq-content jq-shell-content';
+
+    function contentClassName(screenClass) {
+        return CONTENT_CLASS + ' ' + screenClass;
+    }
+
     // callbacks: { onSwitchProfile(), onHome(), onShows(), onMovies(), onSearch(), onRequests() }
     function renderShell(container, callbacks) {
         container.innerHTML = '';
@@ -5037,7 +5158,7 @@
         container.appendChild(rail);
 
         contentEl = document.createElement('main');
-        contentEl.className = 'jq-content jq-shell-content';
+        contentEl.className = CONTENT_CLASS;
         container.appendChild(contentEl);
 
         // The rail outlives every content screen, so it is the one thing
@@ -5053,7 +5174,8 @@
 
     window.JellyQuestShell = {
         render: renderShell,
-        getContent: getContent
+        getContent: getContent,
+        contentClassName: contentClassName
     };
 })();
 
@@ -5343,7 +5465,7 @@
         // items get a visible state and a remote-safe exit.
         if (!canPlay(item, false)) {
             container.innerHTML = '';
-            container.className = 'jq-detail-screen';
+            container.className = window.JellyQuestShell.contentClassName('jq-detail-screen');
             var heading = document.createElement('h1');
             heading.className = 'jq-detail-title';
             heading.textContent = item && item.Name ? item.Name : 'Unavailable item';
@@ -5405,7 +5527,7 @@
         var container = window.JellyQuestShell.getContent();
         var user = window.JellyQuestSession.getCurrentProfile();
         container.innerHTML = '';
-        container.className = 'jq-requests-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-requests-screen');
         var loading = document.createElement('p');
         loading.className = 'jq-requests-status';
         loading.textContent = 'Loading Requests configuration…';

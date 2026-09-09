@@ -7,12 +7,47 @@
 (function () {
     'use strict';
 
-    var COLUMNS = 4;
-    // Twelve complete rows keep the polyfill's O(n) candidate sweep at 48
-    // cards. With 680 items in memory, real posters, the production polyfill,
-    // and 20x CPU throttling, current desktop Chromium measured 48.0ms median
-    // and 91.3ms worst over 100 ArrowDown presses. That desktop result is an
-    // optimistic lower bound, not an M63 or television measurement.
+    // Six 220px tracks with a 20px grid-gap. MEASURED at 1920x1080: the
+    // shell leaves 1920 - 268 (rail) - 96 (this screen's 48px padding) =
+    // 1556px of usable grid width. Six tracks need 6x220 + 5x20 = 1420px and
+    // fit with 136px spare; seven need 1660px and overflow. Four -- what this
+    // was -- left 616px of the content area empty, which is what the viewer
+    // reported as "only 4 cards wide".
+    //
+    // The inline gridTemplateColumns below interpolates this constant rather
+    // than repeating the number, so the track count and the window arithmetic
+    // cannot drift apart WITHIN this file. What can still drift is series.js,
+    // which carries its own copy of both -- and that matters: if the rendered
+    // track count and COLUMNS disagree, a window shift is no longer a whole
+    // number of visual rows, so cards reflow into different columns,
+    // cards[COLUMNS] in measureRowPitch() stops straddling a real row, and
+    // every virtual-padding and paging-row calculation here goes wrong. Change
+    // the two files together.
+    var COLUMNS = 6;
+    // Eight complete rows keep the polyfill's O(n) candidate sweep at 48
+    // cards -- the bound is on MOUNTED CARDS, so widening the grid from four
+    // columns to six does not raise it; it turns twelve rows of four into
+    // eight rows of six.
+    //
+    // What it does change is churn: each window shift now moves COLUMNS = 6
+    // cards instead of 4 (50% more DOM work per shift), and up to 50% more
+    // artwork is on screen per row. MEASURED before and after this change on
+    // one throttled desktop harness (680 items in memory, real posters, the
+    // production polyfill, 20x CPU throttling, 300 ArrowDown presses each,
+    // 48 mounted cards throughout):
+    //
+    //     four columns   median 63.4ms   p99  94.1ms   worst 109.9ms
+    //     six columns    median 73.9ms   p99 113.9ms   worst 126.6ms
+    //
+    // +17% at the median. These are NOT comparable to the 48.0ms/91.3ms this
+    // comment used to quote: that was a different machine, and the four-column
+    // re-measurement above is the only honest baseline for the figures beside
+    // it. READ THE LIMIT: a throttled desktop is an OPTIMISTIC LOWER BOUND for
+    // Chromium M63 on the television, not a television measurement. The worst
+    // samples straddle the 100ms budget at BOTH track counts on this harness,
+    // so six columns is NOT established to be in budget on the real hardware,
+    // by this measurement or by any arithmetic. What it is established to be
+    // is ~17% dearer than four on the only harness available.
     var WINDOW_SIZE = 48;
     var EDGE_ROWS = 2;
 
@@ -31,9 +66,11 @@
     // screen is never short on arrival, and (b) leaves a whole spare window
     // behind it, so the first page never needs a prefetch to have already
     // landed. 714 items become 8 requests instead of 1 truncated one. It is
-    // also a multiple of COLUMNS, so a page boundary always falls on a row
-    // boundary and the only short row is still the last one -- the .jq-grid
-    // precondition in this file's opening comment.
+    // also a multiple of COLUMNS -- 96 = 16 x 6, as 48 = 8 x 6 -- so a page
+    // boundary always falls on a row boundary and the only short row is still
+    // the last one, the .jq-grid precondition in this file's opening comment.
+    // Both divisibility facts have to be rechecked whenever COLUMNS moves;
+    // they hold at six as they did at four.
     //
     // PREFETCH_REMAINING = WINDOW_SIZE. The next page is requested once the
     // cursor comes within 48 items -- 12 ArrowDown presses -- of the end of
@@ -134,7 +171,7 @@
     // callbacks: { onSelectItem(item), onBack() }
     function renderLibrary(container, row, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-library-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-library-screen');
 
         var backButton = document.createElement('button');
         backButton.className = 'jq-back-button jq-focusable';
@@ -437,22 +474,50 @@
         // [nextStart, nextEnd), so its node stays attached throughout the
         // synchronous update. Re-check this if WINDOW_SIZE, COLUMNS,
         // EDGE_ROWS, either trigger threshold, or the +/- COLUMNS step changes.
-        // With today's 48/4/2 values, a down move requires
-        // index >= windowEnd - 8 = windowStart + 40, while nextStart is only
-        // windowStart + 4. An up move requires index < windowStart + 8, while
-        // nextEnd is (windowStart - 4) + 48 = windowStart + 44. Thus neither
-        // edge-removal loop can include the focused index. This is guaranteed
-        // by that arithmetic, not by a runtime assertion.
+        // It is ARITHMETIC, not a runtime assertion -- nothing here checks it
+        // at run time, so the re-derivation below is the whole guarantee.
+        //
+        // RE-DERIVED at today's 48/6/2 values (it was 48/4/2 until this
+        // change). windowStart is always a multiple of COLUMNS: it starts at
+        // 0, moves by +/- COLUMNS, and both clamps in moveWindow() land on
+        // multiples of COLUMNS too -- 0, and maximumStart, which is a
+        // Math.ceil(.../COLUMNS) * COLUMNS. So the row grid never shifts out
+        // of phase and each step below is exactly one visual row.
+        //
+        //   DOWN. Triggers at index >= windowEnd - EDGE_ROWS * COLUMNS =
+        //   windowStart + 48 - 12 = windowStart + 36. nextStart is only
+        //   windowStart + 6 and nextEnd is windowStart + 54, so the removal
+        //   ranges are index < windowStart + 6 and index >= windowStart + 54.
+        //   The focused index is in [windowStart + 36, windowStart + 48), i.e.
+        //   in neither.
+        //
+        //   UP. Triggers at index < windowStart + EDGE_ROWS * COLUMNS =
+        //   windowStart + 12. nextStart is windowStart - 6 and nextEnd is
+        //   (windowStart - 6) + 48 = windowStart + 42, so the removal ranges
+        //   are index < windowStart - 6 and index >= windowStart + 42. The
+        //   focused index is in [windowStart, windowStart + 12), i.e. in
+        //   neither.
+        //
+        // The margins are 30 rows-worth of index on the way down
+        // (36 vs 6) and 30 on the way up (42 vs 12) -- at four columns they
+        // were 36 vs 4 and 44 vs 8. Both shrank and both are still positive,
+        // which is the whole claim.
         //
         // Paging adds one more caller: requestNextPage() calls
         // extendWindowForward(focusedIndex()) when a page lands. That is the
-        // SAME test and the SAME +COLUMNS step as the down branch below, so
-        // the arithmetic above covers it unchanged -- the focused index is
-        // >= windowStart + 40 when it fires, nextStart is windowStart + 4, and
-        // nextEnd is windowStart + 52, so the focused card is in neither
+        // SAME test and the SAME +COLUMNS step as the down branch, so the
+        // derivation above covers it unchanged -- the focused index is
+        // >= windowStart + 36 when it fires, nextStart is windowStart + 6, and
+        // nextEnd is windowStart + 54, so the focused card is in neither
         // removal range. One step is enough to unstick downward traversal: the
         // row below the focused card is at most index + COLUMNS <=
-        // windowStart + 51, which is inside the new [nextStart, nextEnd).
+        // (windowStart + 47) + 6 = windowStart + 53, which is inside the new
+        // [nextStart, nextEnd).
+        //
+        // Two divisibility facts the rest of the screen leans on also survive
+        // the change: WINDOW_SIZE 48 and PAGE_SIZE 96 are both multiples of
+        // COLUMNS = 6, so a window edge and a page boundary each still fall on
+        // a row boundary.
         //
         // Note that it is NOT an append-only operation: moveWindow() removes
         // the COLUMNS cards that fall below the new nextStart before appending

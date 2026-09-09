@@ -25,10 +25,31 @@ test.after(() => server.close());
 // Mirrors src/overlay/screens/library.js. A drift here should fail loudly
 // rather than quietly weaken every bound below.
 const WINDOW_SIZE = 48;
-const COLUMNS = 4;
+const COLUMNS = 6;
 const PAGE_SIZE = 96;
 const PREFETCH_REMAINING = 48;
 const ITEM_COUNT = 680;
+// Rows, not items. ITEM_COUNT is the household's MEASURED movie count and is
+// deliberately not rounded to a multiple of COLUMNS, so the last row is
+// naturally partial and every walk below has to be written in terms of rows.
+const rowsFor = (count) => Math.ceil(count / COLUMNS);
+const ROWS = rowsFor(ITEM_COUNT);
+// The first item of the last row of `count` items -- where a column-0 descent
+// actually ends, which is not count - COLUMNS unless count divides evenly.
+const lastRowStart = (count) => (rowsFor(count) - 1) * COLUMNS;
+// One full page plus a short one, ending in a partial row. See its use below.
+const SHORT_PAGE_TOTAL = 152;
+// How many cards are mounted once the window has slid to the very end.
+// moveWindow() clamps its start with Math.ceil(.../COLUMNS) * COLUMNS -- it
+// must, or the final partial row would be unreachable -- so at a count that is
+// not a multiple of COLUMNS the last window can be up to COLUMNS - 1 cards
+// SHORT of WINDOW_SIZE. MEASURED: 44 at both 680 and 5,000 items with six
+// columns; it was exactly 48 at four, where 680 - 48 already divided evenly.
+// This is a bound on mounted cards, so a short final window is safe by
+// construction; only the exact figure moved.
+const finalWindowSize = (count) => (count <= WINDOW_SIZE
+    ? count
+    : count - Math.ceil((count - WINDOW_SIZE) / COLUMNS) * COLUMNS);
 
 async function signInAsAlice(page) {
     await page.goto(simulatorUrl);
@@ -257,7 +278,7 @@ for (const [itemType, cardHeight] of [['Movie', 410], ['Episode', 204]]) {
                 + `${onArrival.range}px range against a ${onArrival.pitch}px row pitch`);
             assert.equal((await assertWindow(page)).length, WINDOW_SIZE);
 
-            const rows = ITEM_COUNT / COLUMNS;
+            const rows = ROWS;
             for (let row = 0; row < rows; row++) {
                 assert.equal((await focusSnapshot(page)).id, 'page-' + row * COLUMNS);
                 await assertPainted(page.locator(':focus'));
@@ -328,7 +349,7 @@ test(`fetching all ${Math.ceil(ITEM_COUNT / PAGE_SIZE)} pages never mounts more 
         page.setDefaultTimeout(5000);
         await signInAsAlice(page);
         await renderPaged(page, {});
-        for (let row = 1; row < ITEM_COUNT / COLUMNS; row++) {
+        for (let row = 1; row < ROWS; row++) {
             await page.waitForSelector(`[data-item-id="page-${row * COLUMNS}"]`);
             await page.keyboard.press('ArrowDown');
         }
@@ -340,11 +361,12 @@ test(`fetching all ${Math.ceil(ITEM_COUNT / PAGE_SIZE)} pages never mounts more 
         }));
         assert.equal(state.requests, Math.ceil(ITEM_COUNT / PAGE_SIZE),
             'the whole library must be reached in ceil(total / PAGE_SIZE) requests');
-        assert.equal(state.last, 'page-' + (ITEM_COUNT - COLUMNS),
+        assert.equal(state.last, 'page-' + lastRowStart(ITEM_COUNT),
             'the last row must be reachable by remote');
         assert.equal(state.max, WINDOW_SIZE,
             `${Math.ceil(ITEM_COUNT / PAGE_SIZE)} pages of items must still mount at most ${WINDOW_SIZE} cards`);
-        assert.equal(state.mounted, WINDOW_SIZE);
+        assert.equal(state.mounted, finalWindowSize(ITEM_COUNT),
+            'the window resting on the last row holds what a row-aligned start leaves');
     } finally {
         await browser.close();
     }
@@ -474,13 +496,13 @@ test('a page that repeats items from the previous one mounts each Id once', asyn
         await renderPaged(page, { total: 200, overlap: 24 });
 
         const seen = [(await focusSnapshot(page)).id];
-        for (let row = 1; row < 200 / COLUMNS; row++) {
+        for (let row = 1; row < rowsFor(200); row++) {
             await page.waitForSelector(`[data-item-id="page-${row * COLUMNS}"]`);
             seen.push(await pressAndAssertFocus(page, 'ArrowDown'));
             await assertWindow(page);
         }
         assert.equal(new Set(seen).size, seen.length, 'no item may be visited twice');
-        assert.deepEqual(seen, Array.from({ length: 200 / COLUMNS }, (_, row) => 'page-' + row * COLUMNS),
+        assert.deepEqual(seen, Array.from({ length: rowsFor(200) }, (_, row) => 'page-' + row * COLUMNS),
             'every distinct item must be reachable exactly once, in order');
     } finally {
         await browser.close();
@@ -559,7 +581,7 @@ test('an appended card keeps the same three-attempt artwork budget across recrea
 
         // page-100 is in the SECOND page: it exists only because paging
         // fetched it, and its budget was opened after the initial render.
-        const targetRow = 100 / COLUMNS;
+        const targetRow = Math.floor(100 / COLUMNS);
         for (let row = 1; row <= targetRow; row++) {
             await page.waitForSelector(`[data-item-id="page-${row * COLUMNS}"]`);
             await page.keyboard.press('ArrowDown');
@@ -595,18 +617,28 @@ test('exhaustion rests on a short page when the server omits TotalRecordCount', 
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
         page.setDefaultTimeout(5000);
         await signInAsAlice(page);
-        await renderPaged(page, { total: 150, omitTotal: true });
-        for (let row = 1; row < 150 / COLUMNS; row++) {
+        // 152, not the 150 this used at four columns: the point of the count
+        // is (a) one full page plus one short one and (b) a naturally partial
+        // LAST ROW, and 150 is an exact multiple of six, which would have
+        // quietly dropped (b). 152 = 96 + 56 keeps both.
+        await renderPaged(page, { total: SHORT_PAGE_TOTAL, omitTotal: true });
+        for (let row = 1; row < rowsFor(SHORT_PAGE_TOTAL); row++) {
             await page.waitForSelector(`[data-item-id="page-${row * COLUMNS}"]`);
             await page.keyboard.press('ArrowDown');
         }
+        // PRECONDITION for what follows: the last row really is partial, so
+        // the ArrowRight walk below measures a short row rather than a full
+        // one that happens to end there.
+        assert.ok(SHORT_PAGE_TOTAL % COLUMNS !== 0 && SHORT_PAGE_TOTAL > PAGE_SIZE,
+            'the fixture must be one full page plus a short one ending in a partial row');
         // The naturally partial last row is reached, both of its cards
-        // included -- 150 is not a multiple of COLUMNS.
-        assert.equal((await focusSnapshot(page)).id, 'page-148');
-        assert.equal(await pressAndAssertFocus(page, 'ArrowRight'), 'page-149');
+        // included -- SHORT_PAGE_TOTAL is not a multiple of COLUMNS.
+        assert.equal((await focusSnapshot(page)).id, 'page-' + lastRowStart(SHORT_PAGE_TOTAL));
+        assert.equal(await pressAndAssertFocus(page, 'ArrowRight'),
+            'page-' + (SHORT_PAGE_TOTAL - 1));
 
-        // 150 items is one full page and one short one. Without a total, the
-        // short page is what says "stop" -- and nothing may request past it,
+        // SHORT_PAGE_TOTAL items is one full page and one short one. Without a
+        // total, the short page is what says "stop" -- and nothing may request past it,
         // however many more times the cursor re-enters the prefetch zone.
         for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowUp');
         for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowDown');
@@ -638,7 +670,7 @@ test('a page landing while the cursor sits on the last loaded row unsticks Arrow
         await signInAsAlice(page);
         await renderPaged(page, { total: 300, holdFrom: PAGE_SIZE });
 
-        // Walk to the last row of page 1: items 0..95, so row 23, index 92.
+        // Walk to the last row of page 1: items 0..95, so row PAGE_SIZE / COLUMNS - 1.
         const lastLoadedRow = PAGE_SIZE / COLUMNS - 1;
         for (let row = 1; row <= lastLoadedRow; row++) await page.keyboard.press('ArrowDown');
         assert.equal((await focusSnapshot(page)).id, 'page-' + lastLoadedRow * COLUMNS);
@@ -678,12 +710,29 @@ test('a page landing while the cursor sits on the last loaded row unsticks Arrow
 //
 // `visited` is the full column-0 descent, so its length is the number of rows
 // the remote can actually reach and its entries are in item order.
+// A press that does not move the cursor is not proof the descent is over: a
+// page can be in flight, and the row it will mount does not exist yet. At four
+// columns a row needed four new items and the timing happened to work; at six
+// it needs six, and breaking on the first stall silently cut the
+// one-item-per-page descent short at 11 responses instead of the 17 the
+// request ceiling actually allows. So settle before concluding: only STALL_LIMIT
+// consecutive non-moves, each after a pause long enough for a landed page to
+// have mounted its row, ends the walk.
+const STALL_LIMIT = 3;
+const STALL_SETTLE_MS = 120;
+
 async function walkToEnd(page) {
     const visited = [(await focusSnapshot(page)).id];
-    for (let step = 0; step < 400; step++) {
+    let stalls = 0;
+    for (let step = 0; step < 800 && stalls < STALL_LIMIT; step++) {
         await page.keyboard.press('ArrowDown');
         const id = (await focusSnapshot(page)).id;
-        if (id === visited[visited.length - 1]) break;
+        if (id === visited[visited.length - 1]) {
+            stalls++;
+            await page.waitForTimeout(STALL_SETTLE_MS);
+            continue;
+        }
+        stalls = 0;
         visited.push(id);
     }
     return visited;
@@ -694,20 +743,26 @@ for (const [label, options, expected] of [
     // Dedup mounts each Id once; it cannot recover the skipped range, and
     // this asserts exactly that -- browsing continues past the gap and the
     // gap stays a gap.
+    // Stated as ITEMS reachable, not rows: how many rows those items occupy
+    // is a function of COLUMNS, and writing the row count directly is what
+    // made every case here need rewriting when the grid widened.
     ['a duplicate-only page', { total: 300, contradict: 'duplicateOnce' },
-        { requests: [0, 96, 192, 288], rows: 51, boundary: [23, 'page-92', 'page-192'] }],
+        // The server re-serves items 0..95 as page 2, so 96..191 are SKIPPED
+        // and 204 of the 300 items are reachable. The gap falls at grid index
+        // 96, i.e. the row boundary right after the first page.
+        { requests: [0, 96, 192, 288], items: 204, boundary: [96, 'page-192'] }],
     // A short page while the count still says more remain.
     ['a short but positive page', { total: 300, contradict: 'shortOnce' },
-        { requests: [0, 96, 116, 212], rows: 75, boundary: [24, 'page-96', 'page-100'] }],
+        { requests: [0, 96, 116, 212], items: 300, boundary: [96, 'page-96'] }],
     // An understated count, overrun by the very first response.
     ['an understated TotalRecordCount', { total: 300, totalSays: 50 },
-        { requests: [0, 96, 192, 288], rows: 75 }],
+        { requests: [0, 96, 192, 288], items: 300 }],
     // An overstated count: the run past the real end returns empty and stops.
     ['an overstated TotalRecordCount', { total: 300, totalSays: 900 },
-        { requests: [0, 96, 192, 288, 300], rows: 75 }],
+        { requests: [0, 96, 192, 288, 300], items: 300 }],
     // No count at all: the short page is the only end-signal there is.
     ['no TotalRecordCount at all', { total: 300, omitTotal: true },
-        { requests: [0, 96, 192, 288], rows: 75 }],
+        { requests: [0, 96, 192, 288], items: 300 }],
 ]) {
     test(`${label} must not silently truncate the library`, async () => {
         const browser = await chromium.launch();
@@ -720,14 +775,27 @@ for (const [label, options, expected] of [
             const visited = await walkToEnd(page);
             assert.deepEqual(await page.evaluate(() => window.__pageRequests.map((r) => r.StartIndex)),
                 expected.requests, 'request offsets');
-            assert.equal(visited.length, expected.rows, `rows reachable by remote: ${visited.length}`);
+            assert.equal(visited.length, rowsFor(expected.items),
+                `rows reachable by remote: ${visited.length}, from ${expected.items} items`);
             assert.equal(new Set(visited).size, visited.length, 'no row may be visited twice');
             if (expected.boundary) {
-                const [index, before, after] = expected.boundary;
-                assert.equal(visited[index], before);
+                // The boundary is stated as a GRID INDEX (a position in the
+                // deduplicated item list), which is what the fixture actually
+                // controls; the row it lands on follows from COLUMNS.
+                const [gridIndex, after] = expected.boundary;
+                assert.equal(gridIndex % COLUMNS, 0,
+                    'the fixture boundary must fall on a row boundary to be walkable');
+                const boundaryRow = gridIndex / COLUMNS;
+                assert.equal(visited[boundaryRow - 1], 'page-' + (gridIndex - COLUMNS),
+                    'the last row before the boundary');
                 // What the server actually returned next -- NOT a recovery of
                 // anything it skipped.
-                assert.equal(visited[index + 1], after);
+                assert.equal(visited[boundaryRow], after);
+                // ...and browsing carries on past it rather than dead-ending
+                // there, which is the truncation this whole table is about.
+                assert.equal(visited[boundaryRow + 1],
+                    'page-' + (Number(after.slice('page-'.length)) + COLUMNS),
+                    'the descent must continue past the boundary row');
             }
             await assertWindow(page);
         } finally {
@@ -776,13 +844,35 @@ test('a server returning one item per page is bounded by the request ceiling', a
         page.setDefaultTimeout(5000);
         await signInAsAlice(page);
         await renderPaged(page, { total: 300, contradict: 'oneItem' });
-        await walkToEnd(page);
+
+        // NOT walkToEnd(). Requests are strictly user-paced: one is issued
+        // only from a focus MOVE inside the prefetch zone. A one-item response
+        // adds a whole new ROW only every COLUMNS responses, so a purely
+        // vertical descent parks on the last row, stops firing focus events,
+        // and stops asking -- which at six columns ends the descent after 11
+        // responses and would have quietly re-stated this ceiling as 11. That
+        // is the "cursor stops at the last loaded row until the page lands"
+        // state library.js documents, and the way out of it is exactly the
+        // lateral move it names. So nudge, the way a viewer would, and keep
+        // nudging until the SCREEN ITSELF stops issuing requests. That is what
+        // makes the number below a bound rather than an artefact of how far
+        // one particular walk happened to get.
+        let requests = 0;
+        for (let step = 0; step < 400; step++) {
+            await page.keyboard.press('ArrowDown');
+            await page.keyboard.press('ArrowRight');
+            await page.keyboard.press('ArrowLeft');
+            await page.waitForTimeout(10);
+            const now = await page.evaluate(() => window.__pageRequests.length);
+            if (now === requests && step > 40) break;
+            requests = now;
+        }
         // Each response advances the offset by one, so nothing loops -- but
         // nothing finishes either. MINIMUM_PAGE_REQUESTS (16) is the floor
         // that binds here: the ratio ceiling only exceeds it once enough
         // items have actually been fetched, which is precisely what this
         // server refuses to do.
-        const requests = await page.evaluate(() => window.__pageRequests.length);
+        requests = await page.evaluate(() => window.__pageRequests.length);
         assert.equal(requests, 17, `bounded at ${requests} responses`);
     } finally {
         await browser.close();
@@ -839,10 +929,11 @@ test('a legitimate 5,000-item server returning full pages is not truncated by an
         await signInAsAlice(page);
         await renderPaged(page, { total: 5000 });
 
-        // 5,000 items in 4 columns is 1,250 rows. Pressing without reading
-        // focus back each time keeps this to ~2s; the assertions below would
-        // fail loudly if any press had been dropped or any page had lagged.
-        const rows = 5000 / COLUMNS;
+        // 5,000 items in COLUMNS columns is rowsFor(5000) rows. Pressing
+        // without reading focus back each time keeps this to ~2s; the
+        // assertions below would fail loudly if any press had been dropped or
+        // any page had lagged.
+        const rows = rowsFor(5000);
         for (let row = 1; row < rows; row++) await page.keyboard.press('ArrowDown');
 
         const state = await page.evaluate(() => ({
@@ -851,14 +942,15 @@ test('a legitimate 5,000-item server returning full pages is not truncated by an
             mounted: document.querySelectorAll('.jq-library-grid .jq-media-card').length,
             max: window.__maxLibraryCards,
         }));
-        assert.equal(state.focus, 'page-4996',
-            'every one of the 1,250 rows must be reachable by remote');
+        assert.equal(state.focus, 'page-' + lastRowStart(5000),
+            `every one of the ${rows} rows must be reachable by remote`);
         // 53 responses is well past MINIMUM_PAGE_REQUESTS (16), so this also
         // demonstrates that the floor under the ratio ceiling does not bind on
         // a library that legitimately needs more requests than it.
         assert.equal(state.requests, Math.ceil(5000 / PAGE_SIZE),
             `a full-page server must need exactly ceil(5000 / PAGE_SIZE) responses, took ${state.requests}`);
-        assert.equal(state.mounted, WINDOW_SIZE);
+        assert.equal(state.mounted, finalWindowSize(5000),
+            'the window resting on the last row holds what a row-aligned start leaves');
         assert.equal(state.max, WINDOW_SIZE, 'the mounted bound must hold across 53 pages');
     } finally {
         await browser.close();

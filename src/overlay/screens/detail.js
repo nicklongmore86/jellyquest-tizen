@@ -68,7 +68,7 @@
     // these two calls (see app.js's onPlayTrailer).
     function renderDetail(container, item, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-detail-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-detail-screen');
 
         var episodeText = item.Type === 'Episode'
             ? window.JellyQuestCards.textFor(item, 'browse')

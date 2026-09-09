@@ -10,7 +10,19 @@ test.after(() => server.close());
 
 const ITEM_COUNT = 680;
 const WINDOW_SIZE = 48;
-const COLUMNS = 4;
+// src/overlay/screens/library.js's track count. 680 is the household's
+// MEASURED movie count and is deliberately NOT rounded to a multiple of it:
+// 680 / 6 leaves a naturally partial last row of two cards, which is exactly
+// the shape the .jq-grid precondition allows, so the walks below are written
+// per-row rather than assuming every row is full.
+const COLUMNS = 6;
+const ROWS = Math.ceil(ITEM_COUNT / COLUMNS);
+const rowLength = (row) => Math.min(COLUMNS, ITEM_COUNT - row * COLUMNS);
+// ArrowDown presses that must carry the window far enough forward to evict
+// item 0. The window is WINDOW_SIZE / COLUMNS rows and shifts one row at a
+// time once the cursor is within EDGE_ROWS of its end, so anything past the
+// window's own depth does it; the assertions that follow prove it did.
+const EVICTION_ROWS = WINDOW_SIZE / COLUMNS + 3;
 
 async function signInAsAlice(page) {
     await page.goto(simulatorUrl);
@@ -98,39 +110,50 @@ for (const [itemType, cardHeight] of [['Movie', 410], ['Episode', 204]]) {
             await signInAsAlice(page);
             await renderItems(page, ITEM_COUNT, itemType);
 
-            const geometry = await page.evaluate(() => {
+            const geometry = await page.evaluate((COLUMNS) => {
                 const cards = document.querySelectorAll('.jq-library-grid .jq-media-card');
                 const first = cards[0].getBoundingClientRect();
-                const fifth = cards[4].getBoundingClientRect();
+                const nextRow = cards[COLUMNS].getBoundingClientRect();
                 const screen = document.querySelector('.jq-library-screen');
                 return {
                     width: Math.round(first.width),
                     height: Math.round(first.height),
-                    pitch: Math.round(fifth.top - first.top),
+                    pitch: Math.round(nextRow.top - first.top),
                     range: screen.scrollHeight - screen.clientHeight,
+                    template: getComputedStyle(document.querySelector('.jq-library-grid')).gridTemplateColumns,
                 };
-            });
+            }, COLUMNS);
             assert.deepEqual({ width: geometry.width, height: geometry.height }, { width: 220, height: cardHeight });
+            // PRECONDITIONS. The up-traversal below is only a real test if the
+            // grid is deep enough to strand a return trip, and the row
+            // arithmetic is only meaningful if the grid really renders COLUMNS
+            // tracks -- a grid that silently rendered four would make 170 rows
+            // out of these 680 cards and every id below would describe a
+            // different layout while still walking cleanly.
+            assert.equal(geometry.template, Array(COLUMNS).fill('220px').join(' '),
+                'the grid must render exactly COLUMNS 220px tracks');
             assert.ok(geometry.range > geometry.pitch * 100,
                 `fixture must be deep enough to strand traversal: ${geometry.range}px range, ${geometry.pitch}px pitch`);
+            assert.ok(ROWS > WINDOW_SIZE / COLUMNS,
+                'fixture must be deeper than the DOM window to move it at all');
             assert.equal((await assertWindow(page)).length, WINDOW_SIZE);
 
-            for (let row = 0; row < ITEM_COUNT / COLUMNS; row++) {
+            for (let row = 0; row < ROWS; row++) {
                 assert.equal((await focusSnapshot(page)).id, 'window-' + row * COLUMNS);
                 await assertPainted(page.locator(':focus'));
-                for (let column = 1; column < COLUMNS; column++) {
+                for (let column = 1; column < rowLength(row); column++) {
                     assert.equal(await pressAndAssertFocus(page, 'ArrowRight'), 'window-' + (row * COLUMNS + column));
                 }
-                for (let column = COLUMNS - 2; column >= 0; column--) {
+                for (let column = rowLength(row) - 2; column >= 0; column--) {
                     assert.equal(await pressAndAssertFocus(page, 'ArrowLeft'), 'window-' + (row * COLUMNS + column));
                 }
                 await assertWindow(page);
-                if (row + 1 < ITEM_COUNT / COLUMNS) {
+                if (row + 1 < ROWS) {
                     assert.equal(await pressAndAssertFocus(page, 'ArrowDown'), 'window-' + ((row + 1) * COLUMNS));
                 }
             }
 
-            for (let row = ITEM_COUNT / COLUMNS - 1; row >= 0; row--) {
+            for (let row = ROWS - 1; row >= 0; row--) {
                 assert.equal((await focusSnapshot(page)).id, 'window-' + row * COLUMNS);
                 await assertPainted(page.locator(':focus'));
                 await assertWindow(page);
@@ -169,9 +192,9 @@ test('Library card recreation shares the three-attempt artwork retry budget', as
         await page.waitForFunction(() => document.querySelector('[data-item-id="window-0"]').getAttribute('data-artwork-state') === 'error');
 
         for (let visit = 0; visit < 5; visit++) {
-            for (let row = 0; row < 11; row++) await pressAndAssertFocus(page, 'ArrowDown');
+            for (let row = 0; row < EVICTION_ROWS; row++) await pressAndAssertFocus(page, 'ArrowDown');
             assert.equal(await page.locator('[data-item-id="window-0"]').count(), 0, 'first item must actually leave the DOM');
-            for (let row = 0; row < 11; row++) await pressAndAssertFocus(page, 'ArrowUp');
+            for (let row = 0; row < EVICTION_ROWS; row++) await pressAndAssertFocus(page, 'ArrowUp');
             await page.waitForSelector('[data-item-id="window-0"]');
             await page.waitForTimeout(50);
         }
@@ -206,9 +229,9 @@ test('Library artwork recreation assigns twice but causes one observed network d
         await renderItems(page, 80);
         assert.ok((await assertWindow(page)).length <= WINDOW_SIZE);
         await page.waitForFunction(() => document.querySelector('[data-item-id="window-0"] img')?.naturalWidth > 0);
-        for (let row = 0; row < 11; row++) await pressAndAssertFocus(page, 'ArrowDown');
+        for (let row = 0; row < EVICTION_ROWS; row++) await pressAndAssertFocus(page, 'ArrowDown');
         assert.equal(await page.locator('[data-item-id="window-0"]').count(), 0);
-        for (let row = 0; row < 11; row++) await pressAndAssertFocus(page, 'ArrowUp');
+        for (let row = 0; row < EVICTION_ROWS; row++) await pressAndAssertFocus(page, 'ArrowUp');
         await page.waitForFunction(() => document.querySelector('[data-item-id="window-0"] img')?.naturalWidth > 0);
 
         const matchingRequests = Array.from(requestUrls).filter(([, url]) => url === cacheUrl);
