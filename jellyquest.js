@@ -5495,7 +5495,7 @@
         } else if (Date.now() - playbackIdleSince >= 5000) {
             restorePlaybackOverlay();
         }
-    }, 500);
+    }, 1000);
 
     // ---- Root-level Back: the exit confirmation -------------------------
     //

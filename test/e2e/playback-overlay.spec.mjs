@@ -18,6 +18,10 @@ async function setup(t) {
     await page.evaluate(() => document.querySelector('.jq-media-card').click());
     await page.waitForSelector('.jq-detail-action');
     await page.evaluate(() => document.querySelector('.jq-detail-action').focus());
+    // Freeze the running fake clock after async setup. Otherwise its first
+    // runFor sample can include wall-clock drift, leaving six 1s samples
+    // less than five seconds apart. Test the debounce, not that drift.
+    await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now() + 1000)));
     return page;
 }
 
@@ -117,9 +121,15 @@ test('restore unhides before a throwing focus call and does not throw into upstr
     const page = await setup(t);
     await start(page);
     await page.evaluate(() => {
-        document.querySelector('.jq-detail-action').focus = function () { throw new Error('focus fault'); };
+        window.__throwingFocusCalled = false;
+        document.querySelector('.jq-detail-action').focus = function () {
+            window.__throwingFocusCalled = true;
+            throw new Error('focus fault');
+        };
         window.playbackManager.__endPlayback();
     });
+    assert.equal(await page.evaluate(() => window.__throwingFocusCalled), true,
+        'restore must unhide before measuring the poisoned focus target');
     assert.equal((await state(page)).hidden, false);
 });
 
@@ -211,4 +221,19 @@ test('Series can open its season modal during pending Play; Back then reaches th
     await page.evaluate(() => window.playbackManager.__endPlayback());
     assert.equal(await page.locator('.jq-series-season-menu').isVisible(), true);
     assert.equal(await page.evaluate(() => document.querySelector('.jq-series-season-menu').contains(document.activeElement)), true);
+});
+
+
+test('video to audio removes the video player and restores through the five-second idle branch', async (t) => {
+    const page = await setup(t);
+    await start(page);
+    await page.evaluate(() => window.playbackManager.__stop({ Id: 'song', MediaType: 'Audio' }));
+    assert.equal(await page.evaluate(() => window.playbackManager.isPlayingVideo()), false,
+        'a local audio nextItem must remove the video player');
+    assert.equal((await state(page)).hidden, true, 'nextItem stop must not immediately flash the overlay');
+    await page.evaluate(() => window.playbackManager.__start('Audio'));
+    await page.clock.runFor(4000);
+    assert.equal((await state(page)).hidden, true, 'idle debounce must still apply');
+    await page.clock.runFor(2000);
+    assert.deepEqual(await state(page), { hidden: false, overlayFocus: true, painted: true });
 });

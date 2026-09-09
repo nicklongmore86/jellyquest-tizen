@@ -38,7 +38,12 @@
         // _currentSrc, not plugin.js:331-332's private #currentSrc.
         emit('playbackstop', [{ nextItem: nextItem || null,
             nextMediaType: nextItem ? nextItem.MediaType : null }]);
-        if (!nextItem) playingVideo = false;
+        // Local video -> audio selects a different player: htmlVideoPlayer
+        // plugin.js:1717-1718 accepts only Video; htmlAudioPlayer/plugin.js:
+        // 400-401 accepts Audio. playbackmanager.js:3485-3489 removes the
+        // old current player AFTER dispatch; 929-935,950 nulls it. Other
+        // player-selection combinations remain unmodelled here.
+        if (!nextItem || nextItem.MediaType === 'Audio') playingVideo = false;
     }
 
     window.playbackManager = {
