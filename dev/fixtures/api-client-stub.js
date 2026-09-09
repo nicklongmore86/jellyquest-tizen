@@ -67,7 +67,8 @@
         { Id: 'movie-5', Name: 'Harbor Lights', ProductionYear: 2023, RunTimeTicks: 6600 * TICKS_PER_SECOND, Overview: 'A lighthouse keeper’s last winter on the job.', LocalTrailerCount: 0 },
         { Id: 'movie-6', Name: 'Field Notes', ProductionYear: 2021, RunTimeTicks: 5400 * TICKS_PER_SECOND, Overview: 'A biologist’s survey of a valley nobody else wants to study.', LocalTrailerCount: 0 },
         { Id: 'movie-7', Name: 'Second Frost', ProductionYear: 2019, RunTimeTicks: 6300 * TICKS_PER_SECOND, Overview: 'A late-season storm strands a family at the edge of town.', LocalTrailerCount: 0 },
-        { Id: 'movie-8', Name: 'The Long Way Round', ProductionYear: 2018, RunTimeTicks: 7200 * TICKS_PER_SECOND, Overview: 'A road trip that keeps finding reasons not to end.', LocalTrailerCount: 1 },
+        // Divergent SortName makes Movie ordering distinguishable from display Name.
+        { Id: 'movie-8', Name: 'The Long Way Round', SortName: 'Long Way Round, The', ProductionYear: 2018, RunTimeTicks: 7200 * TICKS_PER_SECOND, Overview: 'A road trip that keeps finding reasons not to end.', LocalTrailerCount: 1 },
         { Id: 'movie-9', Name: 'Blue Hour', ProductionYear: 2025, RunTimeTicks: 6000 * TICKS_PER_SECOND, Overview: 'Everything important happens in the twenty minutes after sunset.', LocalTrailerCount: 0 },
         { Id: 'movie-10', Name: 'Open Water', ProductionYear: 2017, RunTimeTicks: 5100 * TICKS_PER_SECOND, Overview: 'A rescue crew’s last call of the season.', LocalTrailerCount: 0 },
     ].map(function (movie) {

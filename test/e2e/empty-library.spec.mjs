@@ -111,17 +111,19 @@ test('the rail stays mounted and navigable when the library is empty', async () 
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
         await signInToEmptyHome(page);
 
-        assert.equal(await page.evaluate(() => document.querySelectorAll('.jq-rail .jq-focusable').length), 5);
+        assert.equal(await page.evaluate(() => document.querySelectorAll('.jq-rail .jq-focusable').length), 6);
 
         // Booting into an empty Home must not strand the user: the rail was
         // focused before Home rendered, and the empty render must not undo it.
         assertVisiblyFocused(await focusState(page), 'after booting into an empty Home');
 
-        // And the remote can still walk the rail through Shows to Search/Requests.
+        // And the remote can still walk the content entries to Search.
         await page.keyboard.press('ArrowDown');
         assert.equal(await page.evaluate(() => document.activeElement.className.includes('jq-nav-home')), true);
         await page.keyboard.press('ArrowDown');
         assert.equal(await page.evaluate(() => document.activeElement.className.includes('jq-nav-shows')), true);
+        await page.keyboard.press('ArrowDown');
+        assert.equal(await page.evaluate(() => document.activeElement.className.includes('jq-nav-movies')), true);
         await page.keyboard.press('ArrowDown');
         assert.equal(await page.evaluate(() => document.activeElement.className.includes('jq-nav-search')), true);
     } finally {
@@ -192,6 +194,12 @@ test('dismissing the exit confirmation on an empty Home leaves focus on somethin
     }
 });
 
+// Review mutation finding: this empty-screen case survives removal of EITHER
+// focusFirst guard individually (expected-focus identity or visible-focus
+// fallback); it fails only when BOTH are removed. This double protection is
+// unchanged from master, not weakened by the Movies rail addition. It is a
+// weaker isolated guard than the delayed Home/Requests siblings with content;
+// do not rely on this test alone to protect either focusFirst condition.
 test('a late empty render does not pull focus off a rail item the user has already selected', async () => {
     const browser = await chromium.launch();
     try {
@@ -217,6 +225,7 @@ test('a late empty render does not pull focus off a rail item the user has alrea
         await page.waitForFunction(() => window.__held.length > 0);
 
         // Meanwhile the user walks the rail down to Search.
+        await page.keyboard.press('ArrowDown');
         await page.keyboard.press('ArrowDown');
         await page.keyboard.press('ArrowDown');
         await page.keyboard.press('ArrowDown');

@@ -214,9 +214,19 @@ test('Home and Library use independent media queries and Library reaches beyond 
     assert.deepEqual(await ids(page, '.jq-home-row-section:first-child .jq-media-card'), ['movie-1', 'episode-516', 'movie-3']);
     assert.equal(await page.locator('.jq-home-row-section').nth(1).locator('.jq-media-card').count(), 8);
     assert.ok((await ids(page, '.jq-home-row-section:nth-child(2) .jq-media-card')).includes('series-1'));
-    await page.locator('.jq-see-all').click();
+    await page.keyboard.press('ArrowDown');
+    const rowItems = await page.locator('.jq-see-all').locator('..').locator('.jq-focusable').count();
+    for (let i = 1; i < rowItems; i++) await page.keyboard.press('ArrowRight');
+    assert.equal(await page.locator(':focus').getAttribute('class'), 'jq-card jq-focusable jq-see-all');
+    await assertPainted(page.locator(':focus'));
+    await page.keyboard.press('Enter');
+    assert.equal(await page.locator('.jq-library-screen').count(), 1);
     await page.waitForSelector('.jq-library-grid .jq-media-card');
     assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), 48);
+    const libraryIds = await ids(page, '.jq-library-grid .jq-media-card');
+    assert.ok(libraryIds.some(id => id.startsWith('movie-')), 'See All must include films');
+    assert.ok(libraryIds.some(id => id.startsWith('series-')), 'See All remains a mixed grid');
+    assert.ok(libraryIds.every(id => !id.startsWith('episode-')), 'See All excludes Episodes');
     assert.deepEqual(await page.evaluate(() => window.__queries), [
         { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' },
         { Recursive: true, IncludeItemTypes: 'Movie,Series', SortBy: 'DateCreated', SortOrder: 'Descending', Limit: 8 },
@@ -545,4 +555,57 @@ test('a resumable Episode enters the existing playback path with its server and 
     await page.evaluate(() => { window.playbackManager.play = options => { window.__played = options; }; });
     await page.getByRole('button', { name: 'Resume', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => window.__played), { ids: ['episode-516'], serverId: 'dev-server-1', startPositionTicks: 6000000000 });
+}));
+
+// A new entry must work from the remote and preserve the shared detail/back route.
+test('Movies rail entry opens only Movies alphabetically and returns from Detail', async () => withPage(async page => {
+    await signIn(page);
+    assert.equal(await page.locator('.jq-nav-movies').count(), 1,
+        'Movies must have a persistent rail entry');
+    await page.evaluate(() => {
+        const original = window.ApiClient.getItems;
+        window.__movieQueries = [];
+        window.ApiClient.getItems = function (user, options) {
+            window.__movieQueries.push({ user, options });
+            return original(user, options);
+        };
+    });
+    await page.keyboard.press('ArrowLeft');
+    assert.equal(await page.locator(':focus').textContent(), 'Home');
+    for (const label of ['Shows', 'Movies']) {
+        await page.keyboard.press('ArrowDown');
+        assert.equal(await page.locator(':focus').textContent(), label);
+        await assertPainted(page.locator(':focus'));
+    }
+    await page.keyboard.press('Enter');
+    assert.equal(await page.locator('.jq-library-screen').count(), 1);
+    await page.waitForSelector('.jq-library-grid .jq-media-card');
+    assert.equal(await page.locator('.jq-library-heading').textContent(), 'Movies');
+    assert.deepEqual(await page.evaluate(() => window.__movieQueries), [{
+        user: 'user-alice',
+        options: { Recursive: true, IncludeItemTypes: 'Movie', SortBy: 'SortName',
+            SortOrder: 'Ascending', StartIndex: 0, Limit: 96 }
+    }]);
+    const movieIds = await ids(page, '.jq-library-grid .jq-media-card');
+    assert.equal(movieIds.length, 10, 'all fixture Movies fit in the shared mounted window');
+    assert.ok(movieIds.every(id => id.startsWith('movie-')), 'exclude Series and Episodes');
+    const titles = await page.locator('.jq-media-card-title').allTextContents();
+    // SortName puts the article-prefixed display title under L, not T.
+    assert.deepEqual(titles, [
+        'Blue Hour', 'Field Notes', 'Harbor Lights', 'The Long Way Round',
+        'Low Tide', 'Open Water', 'Quiet Signal', 'Second Frost', 'Static Bloom',
+        'The Long Winter',
+    ], 'Movies must follow SortName order rather than display Name order');
+    const selected = await page.locator(':focus').getAttribute('data-item-id');
+    assert.equal(selected, movieIds[0]);
+    await assertPainted(page.locator(':focus'));
+    await page.keyboard.press('Enter');
+    assert.equal(await page.locator('.jq-detail-screen').count(), 1);
+    await page.waitForSelector('.jq-detail-title');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.jq-library-heading').textContent(), 'Movies');
+    await page.waitForSelector('.jq-library-grid .jq-media-card');
+    assert.deepEqual(await ids(page, '.jq-library-grid .jq-media-card'), movieIds);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.jq-home-screen').count(), 1);
 }));

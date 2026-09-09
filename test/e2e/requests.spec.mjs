@@ -548,7 +548,8 @@ for (const outcome of ['success', 'HTTP 500']) {
             await page.getByText('Loading Requests configuration…', { exact: true }).waitFor();
 
             await page.keyboard.press('ArrowUp'); // Requests -> Search
-            await page.keyboard.press('ArrowUp'); // Search   -> Shows
+            await page.keyboard.press('ArrowUp'); // Search   -> Movies
+            await page.keyboard.press('ArrowUp'); // Movies   -> Shows
             await page.keyboard.press('ArrowUp'); // Shows    -> Home
             assert.equal(await activeClass(page), 'jq-nav-home');
             await configuration.release();
@@ -633,7 +634,8 @@ test('a delayed Requests session preserves a newer rendered rail selection', asy
         await enterRequestsAndHold(page);
 
         await page.keyboard.press('ArrowUp'); // Requests -> Search
-        await page.keyboard.press('ArrowUp'); // Search   -> Shows
+        await page.keyboard.press('ArrowUp'); // Search   -> Movies
+        await page.keyboard.press('ArrowUp'); // Movies   -> Shows
         await page.keyboard.press('ArrowUp'); // Shows    -> Home
         assert.equal(await activeClass(page), 'jq-nav-home',
             'the delayed-session precondition must leave a real selection on Home');

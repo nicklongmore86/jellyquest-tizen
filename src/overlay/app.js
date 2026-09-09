@@ -59,6 +59,7 @@
             onSwitchProfile: function () { showProfiles(root); },
             onHome: showHome,
             onShows: showShows,
+            onMovies: showMovies,
             onSearch: showSearch,
             onRequests: showRequests,
         });
@@ -86,6 +87,15 @@
         showLibrary({
             title: 'Shows',
             includeItemTypes: 'Series',
+            sortBy: 'SortName',
+            sortOrder: 'Ascending',
+        }, showHome);
+    }
+
+    function showMovies() {
+        showLibrary({
+            title: 'Movies',
+            includeItemTypes: 'Movie',
             sortBy: 'SortName',
             sortOrder: 'Ascending',
         }, showHome);
