@@ -9,8 +9,9 @@ import { assertPainted } from './support/paint.mjs';
 const server = await startServer();
 test.after(() => server.close());
 
-// src/overlay/screens/library.js's grid track count.
+// src/overlay/screens/library.js's grid track count and mounted-card bound.
 const COLUMNS = 6;
+const WINDOW_SIZE = 36;
 
 async function withPage(run) {
     const browser = await chromium.launch();
@@ -254,7 +255,7 @@ test('Home and Library use independent media queries and Library reaches beyond 
     await page.keyboard.press('Enter');
     assert.equal(await page.locator('.jq-library-screen').count(), 1);
     await page.waitForSelector('.jq-library-grid .jq-media-card');
-    assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), 48);
+    assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), WINDOW_SIZE);
     assert.equal(await page.locator('.jq-library-grid .jq-media-card').evaluateAll((cards) =>
         cards.every((card) => card.getBoundingClientRect().height === 410)), true,
     'Movie/Series Library remains a poster grid');
@@ -301,11 +302,13 @@ test('Shows rail entry requests and presents only Series in SortName order', asy
     assert.deepEqual(await page.evaluate(() => window.__showsQueries), [
         { Recursive: true, IncludeItemTypes: 'Series', SortBy: 'SortName', SortOrder: 'Ascending', StartIndex: 0, Limit: 96 }
     ]);
-    assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), 44,
-        'the fixture collection fits under the shared 48-card mounted window');
-    assert.deepEqual(await page.locator('.jq-library-grid .jq-media-card').evaluateAll((cards) =>
-        cards.map((card) => card.querySelector('.jq-media-card-title').textContent)),
-    [
+    // The whole collection in SortName order. The grid mounts a WINDOW_SIZE
+    // window of it, so this is asserted in two halves -- the window on arrival
+    // and the window at the end -- rather than as one DOM read. The second
+    // half matters: 'The Northern Stories 42' sorts at position 38, past the
+    // arrival window, and asserting only the prefix would stop covering the
+    // one entry whose SortName differs from its display name.
+    const EXPECTED_SHOWS = [
         'NHL', 'Northern Stories 1', 'Northern Stories 10', 'Northern Stories 11',
         'Northern Stories 12', 'Northern Stories 13', 'Northern Stories 14', 'Northern Stories 15',
         'Northern Stories 16', 'Northern Stories 17', 'Northern Stories 18', 'Northern Stories 19',
@@ -318,12 +321,29 @@ test('Shows rail entry requests and presents only Series in SortName order', asy
         'Northern Stories 41', 'The Northern Stories 42', 'Northern Stories 5', 'Northern Stories 6',
         'Northern Stories 7', 'Northern Stories 8', 'Northern Stories 9',
         'PAW Patrol',
-    ]);
+    ];
+    const shownTitles = () => page.locator('.jq-library-grid .jq-media-card').evaluateAll((cards) =>
+        cards.map((card) => card.querySelector('.jq-media-card-title').textContent));
+    assert.ok(EXPECTED_SHOWS.length > WINDOW_SIZE,
+        'the fixture must exceed the mounted window, or the second half below tests nothing');
+    assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), WINDOW_SIZE,
+        'the fixture collection is larger than the shared mounted window');
+    assert.deepEqual(await shownTitles(), EXPECTED_SHOWS.slice(0, WINDOW_SIZE));
     assert.equal(await page.locator('.jq-library-grid .jq-media-card').evaluateAll((cards) =>
         cards.every((card) => card.getBoundingClientRect().height === 410)), true,
     'Series must retain poster geometry rather than episode-still geometry');
     assert.equal(await page.evaluate(() => document.activeElement.dataset.itemId), 'series-nhl');
     await assertPainted(page.locator(':focus'));
+
+    // Walk to the end so the rest of the order is presented too.
+    for (let row = 1; row < Math.ceil(EXPECTED_SHOWS.length / COLUMNS); row++) {
+        await page.keyboard.press('ArrowDown');
+    }
+    const terminal = await shownTitles();
+    assert.deepEqual(terminal, EXPECTED_SHOWS.slice(EXPECTED_SHOWS.length - terminal.length),
+        'the terminal window must present the tail of the same SortName order');
+    assert.ok(terminal.includes('The Northern Stories 42'),
+        'the walk must reach the entry whose SortName differs from its display name');
 }));
 
 test('Shows grid walks every row down and back up to painted Back', async () => withPage(async page => {

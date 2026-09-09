@@ -83,10 +83,11 @@
     // pair of files is not -- change both together or the window arithmetic
     // and the rendered rows come apart.
     var COLUMNS = 6;
-    // Unchanged at six columns: the mount bound is on CARDS, so this is now
-    // eight rows of six rather than twelve rows of four. Each window shift
-    // does move COLUMNS = 6 cards instead of 4.
-    var WINDOW_SIZE = 48;
+    // Six complete rows, matching library.js -- see its WINDOW_SIZE comment
+    // for the measurement that chose 36 over 48. The mount bound is on CARDS,
+    // so widening the grid did not raise it and narrowing the window lowers
+    // it: this is now six rows of six, where it was twelve rows of four.
+    var WINDOW_SIZE = 36;
     var EDGE_ROWS = 2;
 
     // callbacks: {
@@ -578,35 +579,57 @@
 
             // INVARIANT: moveWindow() must keep the focused index inside
             // [nextStart, nextEnd), so the focused node stays attached across
-            // the synchronous update. Re-check this if WINDOW_SIZE, COLUMNS,
-            // EDGE_ROWS or the +/- COLUMNS step changes -- and re-check
-            // library.js's copy of the same arithmetic with it. It is
-            // ARITHMETIC: nothing checks it at run time.
+            // the synchronous update. It is ARITHMETIC: nothing checks it at
+            // run time. Re-derive it, do not adjust it, if WINDOW_SIZE,
+            // COLUMNS, EDGE_ROWS or the +/- COLUMNS step changes -- and
+            // re-derive library.js's copy with it.
             //
-            // RE-DERIVED at today's 48/6/2 values (it was 48/4/2 until the
-            // six-column change). windowStart is always a multiple of COLUMNS
-            // -- it starts at 0, steps by +/- COLUMNS, and both of
-            // moveWindow()'s clamps are multiples of COLUMNS -- so every step
-            // is exactly one visual row.
+            // Write S for windowStart, W for WINDOW_SIZE, C for COLUMNS, E for
+            // EDGE_ROWS, N for items.length and i for the focused index. S is
+            // always a multiple of C -- it starts at 0, steps by +/- C, and
+            // both of moveWindow()'s clamps are multiples of C -- so every
+            // step is exactly one visual row.
             //
-            //   DOWN triggers at index >= windowEnd - EDGE_ROWS * COLUMNS =
-            //   windowStart + 36, while nextStart is windowStart + 6 and
-            //   nextEnd is windowStart + 54; the focused index lies in
-            //   [windowStart + 36, windowStart + 48), inside both bounds.
+            // RE-DERIVED at today's W = 36, C = 6, E = 2 (this screen was
+            // 48/4/2 before six columns, and 36/6/2 is a second change on
+            // top). A shift only ever runs on a FULL window here, so
+            // windowEnd = S + W throughout:
             //
-            //   UP triggers at index < windowStart + EDGE_ROWS * COLUMNS =
-            //   windowStart + 12, while nextStart is windowStart - 6 and
-            //   nextEnd is (windowStart - 6) + 48 = windowStart + 42; the
-            //   focused index lies in [windowStart, windowStart + 12), again
-            //   inside both.
+            //   DOWN triggers at i >= windowEnd - E*C = S + 24, so i is in
+            //   [S + 24, S + 36). nextStart = S + 6, nextEnd = min(N, S + 42),
+            //   and the branch only runs while windowEnd < N, so nextEnd is at
+            //   least S + 37. The removal ranges -- below S + 6, and at or
+            //   above nextEnd -- both miss i, by 18 and by at least 2.
             //
-            // So neither removal loop can reach the focused index. WINDOW_SIZE
-            // 48 is a multiple of COLUMNS = 6, so a window edge still falls on
-            // a row boundary.
+            //   UP triggers at i < S + E*C = S + 12 with S > 0, so i is in
+            //   [S, S + 12). nextStart = S - 6, nextEnd = S + 30 (a full
+            //   window means N >= S + 36). The removal ranges -- below S - 6,
+            //   and at or above S + 30 -- both miss i, by 6 and by 18.
             //
-            // Unlike library.js there is no paging caller: the series arrives
-            // whole and this season partition never grows, so this is the
-            // only mutator.
+            // GENERALLY: DOWN needs W - E*C >= C and UP needs W - C >= E*C.
+            // Both reduce to W >= C * (E + 1) = 18 at today's C and E. That
+            // LOWER BOUND is what to check first if the mount window is ever
+            // reduced again: 36 clears it by a factor of two, every margin
+            // above shrinks linearly with W until it is reached, and below 18
+            // the trigger zone overlaps the removal range and the focused card
+            // can be evicted.
+            //
+            // WHY THE FULL-WINDOW PRECONDITION HOLDS HERE, which is exactly
+            // what library.js could not assume. This screen does not page: a
+            // season's episode list arrives whole and `items` never grows
+            // after mountEpisodes(). So a window that is short is short
+            // because it holds the ENTIRE season, and then
+            // windowEnd === items.length -- which is precisely what the down
+            // branch below refuses. The window therefore never slides while
+            // short, and the terminal short window at the bottom of a long
+            // season only ever shifts UP, whose derivation above needs no
+            // lower bound on windowEnd beyond a full old window. library.js
+            // has an asynchronous case this does not, and handles it in
+            // extendWindowForward(); if paging is ever added here, that branch
+            // has to come with it.
+            //
+            // WINDOW_SIZE 36 is a multiple of COLUMNS = 6, so a window edge
+            // still falls on a row boundary.
             episodeWindow = {
                 onFocus: function (focused) {
                     var focusedIndex = focused._jqSeriesIndex;

@@ -38,9 +38,10 @@ const MAX_PRESSES = 40;
 // to the track count re-sizes the fixtures instead of silently turning a
 // full-row walk into a ragged one.
 const COLUMNS = 6;
-// Rows the DOM window holds: WINDOW_SIZE 48 / COLUMNS. The deep fixtures
-// below must exceed this in both directions to cross a window boundary.
-const WINDOW_ROWS = 48 / COLUMNS;
+// Rows the DOM window holds: WINDOW_SIZE / COLUMNS. The deep fixtures below
+// must exceed this in both directions to cross a window boundary.
+const WINDOW_SIZE = 36;
+const WINDOW_ROWS = WINDOW_SIZE / COLUMNS;
 
 async function signInAsAlice(page) {
     await page.goto(simulatorUrl);
@@ -331,9 +332,9 @@ test('Library: ArrowDown reaches the bottom row of a grid taller than the screen
 // has 143px of range, less than the 150px pitch, so the return trip has
 // nothing to strand on and it looks fine however broken the margin is; the
 // same 7 rows at 330px have 1543px of range and stranded on card 17. These
-// use 15 rows so traversal crosses the DOM window (WINDOW_ROWS = 8 rows at
-// today's six columns, 12 at the four this grid used to have) in both
-// directions, and assert the measured scroll range.
+// use 15 rows so traversal crosses the DOM window (WINDOW_ROWS = 6 rows at
+// today's 36-card window over six columns, 12 at the 48 over four this grid
+// used to have) in both directions, and assert the measured scroll range.
 //
 // Card heights cover today's 130px .jq-media-card and the 330px poster and
 // 124px still that card artwork introduces. Overriding that height is

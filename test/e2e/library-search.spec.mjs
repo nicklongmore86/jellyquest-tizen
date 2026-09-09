@@ -14,7 +14,7 @@ test.after(() => server.close());
 // alone no longer exercises a partial last row and the second test below
 // stubs one deliberately.
 const COLUMNS = 6;
-const WINDOW_SIZE = 48;
+const WINDOW_SIZE = 36;
 const LIBRARY_ITEMS = 54;
 
 async function signInAsAlice(page) {
@@ -33,7 +33,7 @@ test('library grid: the production fixture navigates across the whole windowed g
         await page.evaluate(() => document.querySelector('.jq-see-all').click());
         await page.waitForSelector('.jq-library-grid .jq-media-card');
 
-        // The first 48-item window is WINDOW_SIZE / COLUMNS full rows; the
+        // The first window is WINDOW_SIZE / COLUMNS full rows; the
         // final shift exposes the rest of the response without mounting all
         // LIBRARY_ITEMS at once.
         assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), WINDOW_SIZE);

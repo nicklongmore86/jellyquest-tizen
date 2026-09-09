@@ -24,7 +24,7 @@ test.after(() => server.close());
 
 // Mirrors src/overlay/screens/library.js. A drift here should fail loudly
 // rather than quietly weaken every bound below.
-const WINDOW_SIZE = 48;
+const WINDOW_SIZE = 36;
 const COLUMNS = 6;
 const PAGE_SIZE = 96;
 const PREFETCH_REMAINING = 48;
@@ -32,6 +32,7 @@ const ITEM_COUNT = 680;
 // Rows, not items. ITEM_COUNT is the household's MEASURED movie count and is
 // deliberately not rounded to a multiple of COLUMNS, so the last row is
 // naturally partial and every walk below has to be written in terms of rows.
+const EDGE_ROWS = 2;
 const rowsFor = (count) => Math.ceil(count / COLUMNS);
 const ROWS = rowsFor(ITEM_COUNT);
 // The first item of the last row of `count` items -- where a column-0 descent
@@ -43,8 +44,9 @@ const SHORT_PAGE_TOTAL = 152;
 // moveWindow() clamps its start with Math.ceil(.../COLUMNS) * COLUMNS -- it
 // must, or the final partial row would be unreachable -- so at a count that is
 // not a multiple of COLUMNS the last window can be up to COLUMNS - 1 cards
-// SHORT of WINDOW_SIZE. MEASURED: 44 at both 680 and 5,000 items with six
-// columns; it was exactly 48 at four, where 680 - 48 already divided evenly.
+// SHORT of WINDOW_SIZE. MEASURED: 32 at both 680 and 5,000 items with six
+// columns and a 36-card window (44 at a 48-card one); it was exactly 48 at
+// four columns, where 680 - 48 already divided evenly.
 // This is a bound on mounted cards, so a short final window is safe by
 // construction; only the exact figure moved.
 const finalWindowSize = (count) => (count <= WINDOW_SIZE
@@ -82,11 +84,16 @@ async function signInAsAlice(page) {
 //               server can oscillate between page sizes
 //   growingTotal report a TotalRecordCount that is always ahead of what has
 //               been served, so it can never be reached
+//   firstPage   serve only this many items in the FIRST response, so the
+//               screen arrives with a window that is not yet full. A
+//               short-but-positive first page is a shape appendPage()
+//               explicitly accepts and keeps paging from.
 async function renderPaged(page, options) {
     const config = Object.assign({
         total: ITEM_COUNT, itemType: 'Movie', overlap: 0,
         omitTotal: false, holdFrom: null, failFrom: null,
         totalSays: null, contradict: null, yieldPlan: null, growingTotal: false,
+        firstPage: null,
     }, options);
     await page.evaluate((config) => {
         const items = [];
@@ -131,6 +138,9 @@ async function renderPaged(page, options) {
                 } else if (config.contradict === 'oneItem') {
                     served = items.slice(from, from + 1);
                 }
+            }
+            if (config.firstPage !== null && nth === 1) {
+                served = items.slice(0, config.firstPage);
             }
             if (config.yieldPlan && nth > 1) {
                 served = items.slice(from, from + config.yieldPlan[(nth - 2) % config.yieldPlan.length]);
@@ -367,6 +377,90 @@ test(`fetching all ${Math.ceil(ITEM_COUNT / PAGE_SIZE)} pages never mounts more 
             `${Math.ceil(ITEM_COUNT / PAGE_SIZE)} pages of items must still mount at most ${WINDOW_SIZE} cards`);
         assert.equal(state.mounted, finalWindowSize(ITEM_COUNT),
             'the window resting on the last row holds what a row-aligned start leaves');
+    } finally {
+        await browser.close();
+    }
+});
+
+// ---- Regression: a short first page must FILL, never SLIDE ---------------
+//
+// The window trigger's arithmetic is stated for a FULL window, where
+// windowEnd = windowStart + WINDOW_SIZE. That is false while a short first
+// page is still filling the window: windowEnd is then bounded by the item
+// count, so `windowEnd - EDGE_ROWS * COLUMNS` is an absolute index near the
+// START of the list, the slide fires far too early, and the cards it evicts
+// can include the one the cursor is on.
+//
+// MEASURED before the fix, with COLUMNS = 6: a first response of 13 items with
+// TotalRecordCount 300, the cursor moved to index 1, then 96 more items
+// delivered. The test read 1 >= 13 - 12, fired, advanced the start to 6 and
+// removed the focused node; focus landed on <body>. Asynchronous completion
+// beating newer intent is this repo's recurring cursor-loss shape, so this is
+// asserted on the DOM, not inferred: removeChild is instrumented and must
+// never be handed the active element.
+//
+// FIRST_PAGE is deliberately in the window's trigger zone but not at its end,
+// and INDEX is deliberately near the START of the list -- the two facts that
+// together made the old arithmetic degenerate.
+const FIRST_PAGE = 13;
+
+test('a short first page fills the window instead of sliding it off the cursor', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        page.setDefaultTimeout(5000);
+        await signInAsAlice(page);
+        await page.evaluate(() => {
+            window.__removedActive = 0;
+            const removeChild = Node.prototype.removeChild;
+            Node.prototype.removeChild = function (child) {
+                if (child === document.activeElement) window.__removedActive++;
+                return removeChild.call(this, child);
+            };
+        });
+        await renderPaged(page, { total: 300, firstPage: FIRST_PAGE, holdFrom: FIRST_PAGE });
+
+        // PRECONDITIONS. Without all three this test cannot detect the defect:
+        // the window must really be short, more items must really be coming,
+        // and the cursor must sit inside what the broken trigger would evict.
+        assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), FIRST_PAGE,
+            'the screen must arrive with a window shorter than WINDOW_SIZE');
+        assert.ok(FIRST_PAGE < WINDOW_SIZE, 'the first page must not fill the window');
+        await page.waitForFunction(() => window.__held.length === 1);
+
+        assert.equal(await pressAndAssertFocus(page, 'ArrowRight'), 'page-1');
+        const focusedIndex = 1;
+        assert.ok(focusedIndex >= FIRST_PAGE - EDGE_ROWS * COLUMNS,
+            'the cursor must be inside the zone the short-window trigger misreads');
+        assert.ok(focusedIndex < COLUMNS,
+            'the cursor must be inside the row a one-row slide would evict');
+
+        const paddingBefore = await gridPaddingBottom(page);
+        await page.evaluate(() => window.__held[0]());
+        await waitForAppendedPage(page, paddingBefore);
+
+        const focus = await focusSnapshot(page);
+        assert.equal(focus.id, 'page-1', 'the arriving page must not move the cursor');
+        assert.equal(focus.body, false, 'the arriving page must not drop focus onto <body>');
+        assert.equal(focus.attached, true, 'focus must not be left on a detached node');
+        assert.equal(focus.painted, true);
+        assert.equal(await page.evaluate(() => window.__removedActive), 0,
+            'no window update may remove the focused node');
+        await assertPainted(page.locator(':focus'));
+
+        // ...and the window must have FILLED, not stayed short: the whole
+        // point of running the forward test on a landing page is that the rows
+        // the page made available become reachable.
+        const ids = await assertWindow(page);
+        assert.equal(ids.length, WINDOW_SIZE, 'the arriving page must fill the window to its bound');
+        assert.equal(ids[0], 0, 'filling must not move the window start');
+
+        // Downward traversal must be usable straight afterwards, with no
+        // lateral move needed to unstick it.
+        for (let row = 1; row <= 3; row++) {
+            assert.equal(await pressAndAssertFocus(page, 'ArrowDown'), 'page-' + (row * COLUMNS + 1));
+        }
+        assert.equal(await page.evaluate(() => window.__removedActive), 0);
     } finally {
         await browser.close();
     }

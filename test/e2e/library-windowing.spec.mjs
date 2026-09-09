@@ -9,7 +9,7 @@ const simulatorUrl = `${server.baseUrl}/dev/simulator.html`;
 test.after(() => server.close());
 
 const ITEM_COUNT = 680;
-const WINDOW_SIZE = 48;
+const WINDOW_SIZE = 36;
 // src/overlay/screens/library.js's track count. 680 is the household's
 // MEASURED movie count and is deliberately NOT rounded to a multiple of it:
 // 680 / 6 leaves a naturally partial last row of two cards, which is exactly

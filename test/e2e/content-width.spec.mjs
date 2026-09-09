@@ -177,6 +177,73 @@ test('Detail fills the pane up to its deliberate max-width', async () => withPag
         DETAIL_MAX_WIDTH + 'px', 'the max-width must survive the restored shell class');
 }));
 
+// ---- The two app.js paths ----------------------------------------------
+//
+// These are the sites the screen renderers do not own: showDetail()'s
+// unsupported-item guard and showRequests()'s loading state. Both assigned
+// className outright and both lost the shell class, and neither is reachable
+// through the settled-screen cases above -- the Requests case waits for the
+// input, which only exists once requests.js has re-rendered, and the Detail
+// case selects a playable item. Reverting just these two assignments to bare
+// classes left every other case in this file green.
+
+test('an unsupported item fills the pane rather than its own text', async () => withPage(async (page) => {
+    await page.goto(simulatorUrl);
+    await page.waitForSelector('.jq-profile-card');
+    await page.evaluate(() => {
+        window.ApiClient.getItems = () => Promise.resolve({
+            Items: [{ Id: 'unsupported', Type: 'Audio', IsFolder: false,
+                Name: 'Unsupported example', ServerId: 'dev-server-1' }],
+        });
+    });
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.jq-media-card');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.jq-detail-error');
+
+    // This screen is a heading, one line of error text and a Back button, so
+    // shrink-wrapping is at its most visible here: it measured its own text.
+    assert.equal(await page.locator('.jq-detail-screen').evaluate((element) =>
+        element.classList.contains('jq-shell-content')), true,
+    'the unsupported-item fallback must not overwrite the shell class');
+    assert.deepEqual(await paneExtent(page, '.jq-detail-screen'),
+        { left: RAIL, right: RAIL + DETAIL_MAX_WIDTH, width: DETAIL_MAX_WIDTH },
+        'the unsupported-item fallback must be its max-width, not its content width');
+}));
+
+test('the Requests loading state fills the pane before its configuration lands', async () => withPage(async (page) => {
+    // app.js fetches the build configuration once at boot, fire-and-forget,
+    // so holding it from before the first navigation is the only way to see
+    // showRequests()'s loading render at all.
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route('**/jellyquest-build.json', async (route) => {
+        await held;
+        await route.continue();
+    });
+    await page.goto(simulatorUrl);
+    await page.waitForSelector('.jq-profile-card');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.jq-media-card');
+    await page.locator('.jq-nav-requests').click();
+    await page.getByText('Loading Requests configuration…', { exact: true }).waitFor();
+
+    // PRECONDITION: this must be the LOADING render, not the settled one that
+    // the Requests case above already covers.
+    assert.equal(await page.locator('.jq-requests-input').count(), 0,
+        'the settled Requests screen must not have replaced this render yet');
+    assert.equal(await page.locator('.jq-requests-screen').evaluate((element) =>
+        element.classList.contains('jq-shell-content')), true,
+    'the Requests loading render must not overwrite the shell class');
+    assert.deepEqual(await paneExtent(page, '.jq-requests-screen'), EXPECTED_PANE,
+        'the Requests loading render must span the pane');
+
+    release();
+    await page.waitForSelector('.jq-requests-input');
+    assert.deepEqual(await paneExtent(page, '.jq-requests-screen'), EXPECTED_PANE,
+        'and so must the settled render that replaces it');
+}));
+
 test('the profile picker is untouched and still spans the whole screen', async () => withPage(async (page) => {
     await page.goto(simulatorUrl);
     await page.waitForSelector('.jq-profile-card');
