@@ -4,5 +4,5 @@
   "serverUrl": "https://jelly-farmhouse.starrgroup.io",
   "requestsUrl": "https://jellyseerr.starrgroup.io",
   "requestsBridgeUrl": "https://jelly-farmhouse.starrgroup.io/jellyquest-bridge/bridge.html",
-  "requestsPageVersion": "1.0.5"
+  "requestsPageVersion": "1.0.6"
 }
