@@ -480,7 +480,8 @@ function writePinnedWebFixture(webDirectory, overrides = {}) {
             itemShortcuts.on(view.querySelector('.nameContainer'));
             itemShortcuts.off(view.querySelector('.nameContainer'));
 }`,
-        'src/components/playback/playbackmanager.js': `export const playbackManager = new PlaybackManager();
+        'src/components/playback/playbackmanager.js': `import Events from '../../utils/events.ts';
+export const playbackManager = new PlaybackManager();
 bindMediaSegmentManager(playbackManager);
 bindMediaSessionSubscriber(playbackManager);
 `,
@@ -634,4 +635,30 @@ test('installs through the direct Samsung TV workflow', () => {
     assert.match(installer, /vd_applist/);
     assert.match(installer, /execute/);
     assert.match(installer, /app_version/);
+});
+
+test('playback event bridge is idempotent and fails loudly on import or bridge drift', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'jellyquest-events-'));
+    try {
+        writePinnedWebFixture(directory);
+        const sourcePath = path.join(directory, 'src/components/playback/playbackmanager.js');
+        const patch = () => spawnSync(process.execPath, [path.join(root, 'scripts/patch-jellyfin-web.mjs'), directory], { encoding: 'utf8' });
+        assert.equal(patch().status, 0);
+        const source = fs.readFileSync(sourcePath, 'utf8');
+        assert.match(source, /Events\.on\(playbackManager, type, callback\)/);
+        assert.match(source, /if \(window.JellyQuestBindPlayback\) window.JellyQuestBindPlayback\(\)/);
+        assert.equal(patch().status, 0);
+        assert.equal(fs.readFileSync(sourcePath, 'utf8'), source);
+        for (const damaged of [
+            source.replace("import Events from '../../utils/events.ts';", ''),
+            source.replace('Events.on(playbackManager, type, callback)', 'Events.on(other, type, callback)')
+        ]) {
+            fs.writeFileSync(sourcePath, damaged);
+            const result = patch();
+            assert.notEqual(result.status, 0);
+            assert.match(result.stderr, /playback event bridge no longer matches/);
+        }
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 });

@@ -69,3 +69,25 @@ if (playbackManagerSource.includes(patchedPlaybackManagerSingleton)) {
 } else {
     throw new Error('Pinned Jellyfin Web playback manager singleton no longer matches; update the JellyQuest patch');
 }
+
+// Publish Events.on through a narrow bridge; never read upstream _callbacks.
+// Check the import as well as the singleton: a renamed Events must fail at build.
+const eventSource = fs.readFileSync(playbackManagerPath, 'utf8');
+const eventAnchor = 'window.playbackManager = playbackManager;';
+const eventPatch = `${eventAnchor}
+window.JellyQuestPlaybackEvents = function (type, callback) {
+    Events.on(playbackManager, type, callback);
+};
+if (window.JellyQuestBindPlayback) window.JellyQuestBindPlayback();`;
+if (!eventSource.includes("import Events from '../../utils/events.ts';")
+    || !eventSource.includes(eventAnchor)) {
+    throw new Error('Pinned Jellyfin Web playback event bridge no longer matches; update the JellyQuest patch');
+}
+if (eventSource.includes(eventPatch)) {
+    console.info('JellyQuest playback event bridge already applied');
+} else if (eventSource.includes('window.JellyQuestPlaybackEvents')) {
+    throw new Error('Pinned Jellyfin Web playback event bridge no longer matches; update the JellyQuest patch');
+} else {
+    fs.writeFileSync(playbackManagerPath, eventSource.replace(eventAnchor, eventPatch));
+    console.info('Applied JellyQuest playback event bridge');
+}

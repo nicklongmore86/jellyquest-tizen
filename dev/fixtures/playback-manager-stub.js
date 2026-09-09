@@ -12,6 +12,34 @@
 
     var calls = [];
     var playingVideo = false;
+    var callbacks = {};
+    var nextOutcome = null;
+    var changingStream = false;
+    // utils/events.ts:26-29,41-46: synchronous callbacks, event first,
+    // snapshot iteration, no exception isolation.
+    window.JellyQuestPlaybackEvents = function (type, callback) {
+        (callbacks[type] || (callbacks[type] = [])).push(callback);
+    };
+    function emit(type, args) {
+        (callbacks[type] || []).slice().forEach(function (callback) {
+            callback.apply(window.playbackManager, [{ type: type }].concat(args || []));
+        });
+    }
+    function start(mediaType) {
+        playingVideo = mediaType === 'Video';
+        // playbackmanager.js:3295 / 3326.
+        emit('playbackstart', [{}, { NowPlayingItem: { MediaType: mediaType } }]);
+    }
+    function stop(nextItem) {
+        // playbackmanager.js:3437-3439: stream replacement suppresses stop.
+        if (changingStream) return;
+        // Keep the old source during same-player queue handoff: manager
+        // 3484-3490 retains that player; htmlMediaHelper.js:357-359 clears
+        // _currentSrc, not plugin.js:331-332's private #currentSrc.
+        emit('playbackstop', [{ nextItem: nextItem || null,
+            nextMediaType: nextItem ? nextItem.MediaType : null }]);
+        if (!nextItem) playingVideo = false;
+    }
 
     window.playbackManager = {
         // Real: playbackmanager.js's self.play (playbackmanager.js:2086).
@@ -28,33 +56,22 @@
         // upstream, so the throw surfaces to callers as a REJECTION; the
         // shapes match deliberately.
         //
-        // That one check is the whole of the contract modelled here -- this
-        // is NOT a complete player, and it diverges in both directions:
-        //
-        //   MORE PERMISSIVE than the real player. `{ serverId }` with no
-        //   `ids`, and an empty `items: []`, both resolve here and mark
-        //   playback started. Upstream, the first dies on
-        //   `options.ids.join(',')` (playbackmanager.js:2111) and the second
-        //   reaches playWithIntros with nothing to play, which rejects with
-        //   NO_MEDIA_ERROR (playbackmanager.js:2300-2302).
-        //
-        //   STRICTER than the real player. Upstream delegates to an ACTIVE
-        //   REMOTE PLAYER before it ever reaches the serverId check --
-        //   `if (!self._currentPlayer.isLocalPlayer) { return
-        //   self._currentPlayer.play(options); }`
-        //   (playbackmanager.js:2094-2095) -- so an ids-only request can
-        //   legitimately succeed when casting to another device. This stub
-        //   rejects it. Remote-player delegation is deliberately not modelled:
-        //   JellyQuest has no cast UI, and inventing one here would repeat the
-        //   mistake this stub was tightened to prevent.
+        // Lifecycle below models the pinned manager's event arguments and
+        // ordering, not codecs, OSD, timing, or upstream focus (unmodelled).
         play: function (options) {
             options = options || {};
             if (!options.items && !options.serverId) {
                 return Promise.reject(new Error('serverId required!'));
             }
             calls.push(options);
-            playingVideo = true;
-            return Promise.resolve();
+            var outcome = nextOutcome;
+            nextOutcome = null;
+            // 2378-2383 swallows failure; 2300-2302 / 2347-2350 reject bare
+            // with no lifecycle event. Explicit test controls, not guessed
+            // mappings from media metadata to server/decoder failures.
+            if (outcome === 'silent-resolve') return Promise.resolve();
+            if (outcome === 'silent-reject') return Promise.reject();
+            return Promise.resolve().then(function () { start('Video'); });
         },
         // Real: playbackmanager.js's self.playTrailers
         // (playbackmanager.js:3891-3925). Modelled here because Detail's
@@ -118,6 +135,25 @@
         // Test-only inspection hooks -- not part of the real playbackManager
         // API, so screens must never call these themselves.
         __calls: calls,
-        __endPlayback: function () { playingVideo = false; },
+        __endPlayback: function () { stop(null); },
+        __start: start,
+        __stop: stop,
+        __cancel: function () {
+            // 2386-2394: destroy/remove then cancel, no stop.
+            playingVideo = false;
+            emit('playbackcancelled');
+        },
+        __error: function () {
+            // 3429-3431: error THEN onPlaybackStopped (including suppression).
+            emit('playbackerror', ['test-error']);
+            stop(null);
+        },
+        __changingStream: function (value) { changingStream = value; },
+        __nextOutcome: function (value) { nextOutcome = value; },
+        // Deliberate fault injection for missing signals / stale accessors;
+        // NOT a claim that upstream always clears currentSrc on a failure.
+        __setPlayingVideo: function (value) { playingVideo = value; },
+        __subscriptions: callbacks,
     };
+    if (window.JellyQuestBindPlayback) window.JellyQuestBindPlayback();
 })();

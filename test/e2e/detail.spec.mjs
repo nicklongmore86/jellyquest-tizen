@@ -252,6 +252,8 @@ test('a detail fetch that fails says so on screen, and says what still works', a
         assert.deepEqual(await actionLabels(page), ['Resume', 'Start Over', 'Add to My List']);
         await button(page, 'Resume').click();
         await page.waitForFunction(() => window.playbackManager.__calls.length > 0);
+        // Playback owns the surface until it ends.
+        await page.evaluate(() => window.playbackManager.__endPlayback());
         await button(page, 'Add to My List').click();
         await page.waitForFunction(() => Boolean(document.querySelector('.jq-my-list-action'))
             && document.querySelector('.jq-my-list-action').textContent === 'Remove from My List');
@@ -338,6 +340,7 @@ test('Play/Resume/Start Over call playbackManager.play with the right start posi
         assert.equal(resumeCall.ids[0], 'movie-1');
         assert.ok(resumeCall.startPositionTicks > 0, 'Resume must start from the saved position');
 
+        await page.evaluate(() => window.playbackManager.__endPlayback());
         await button(page, 'Start Over').click();
         await page.waitForFunction(() => window.playbackManager.__calls.length > 1);
         const startOverCall = await page.evaluate(() => window.playbackManager.__calls.slice(-1)[0]);
@@ -364,6 +367,8 @@ test('every play request names the server the ids belong to', async () => {
         const call = await page.evaluate(() => window.playbackManager.__calls.slice(-1)[0]);
         // The item's own ServerId, as jellyfin-web's playmenu.js:41-51 sends.
         assert.equal(call.serverId, 'dev-server-1');
+
+        await page.evaluate(() => window.playbackManager.__endPlayback());
 
         // And the fallback for an item that carries no ServerId of its own:
         // ApiClient.serverId(), the accessor jellyfin-web reaches for in the
