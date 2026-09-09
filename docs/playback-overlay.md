@@ -49,6 +49,36 @@ _currentPlayer clearing. Load order protects against later module listeners, but
 cannot honestly make that failure unreachable. No constructor/bridge change is
 made in this documentation/test follow-up.
 
+That hazard is bounded to ONE named callback at this pinned ref, and that
+callback cannot currently throw. Both halves were verified directly against
+`.cache/jellyfin-web` and both must be re-checked on any jellyfin-web ref bump:
+
+1. SkipSegment is the ONLY `playbackstop` listener ahead of ours. The other
+   constructor-time subscriber bound at `playbackmanager.js:3726` is
+   MediaSegmentManager (`apps/stable/features/playback/utils/mediaSegmentManager.ts:19`),
+   which defines only `onPlayerTimeUpdate` (`:119`) and NO `onPlaybackStop`, so
+   `this.onPlaybackStop?.bind(this)` is undefined and the `if (handler)` guard in
+   `playbackSubscriber.ts:84-86` skips registration entirely. The two
+   module-level binds at `playbackmanager.js:4295-4296` run AFTER our bridge.
+2. `SkipSegment.onPlaybackStop` (`skipsegment.ts:192-198`) is throw-free. Its
+   whole body is four statements: `this.currentSegment = null`,
+   `this.hideSkipButton()`, a `playbackStopInfo.nextItem` dereference on an
+   object the manager always supplies (`:3474-3480`, `:3534`), and
+   `Events.off(document, ...)`. `hideSkipButton` (`:112-127`) guards on
+   `if (elem)` and its only fragile call --
+   `dom.addEventListener(elem, dom.whichTransitionEvent(), ...)` -- is INSIDE a
+   `requestAnimationFrame` callback, so it runs on a later frame, outside the
+   `Events.trigger` dispatch loop. A throw there cannot abort the dispatch.
+
+Note the server-state direction is reassuring rather than alarming: `skipElement`
+stays null until `createSkipElement()` runs, which requires `this.currentSegment`,
+which requires the server to have returned media segments. Without segment
+providers configured, `hideSkipButton()` returns at the `if (elem)` guard.
+
+The consequence for maintenance: the never-stranded property is NOT structurally
+guaranteed by listener ordering. It is contingent on the two facts above. Treat
+them as a maintained invariant, not as an argument.
+
 Only a video `playbackstart` hides the root, using `display: none`. This removes
 all descendants from paint, hit tests and focus eligibility. `visibility: hidden`
 would avoid subtree layout on restore, but a future visible descendant could
