@@ -4945,7 +4945,7 @@
 })();
 
 /* ---- src/overlay/shell.js ---- */
-// Top-level nav shell -- the persistent rail (Profile/Home/Shows/Search/Requests)
+// Top-level nav shell -- the persistent rail (Profile/Home/Shows/Movies/Search/Requests)
 // stays mounted across every screen; app.js swaps what's in the content
 // area beneath/beside it (Home, Search, Library, Detail). This matches
 // DETAIL_ACTIONS.md's focus graph, which has the rail reachable by Up
@@ -4959,7 +4959,7 @@
 
     var contentEl = null;
 
-    // callbacks: { onSwitchProfile(), onHome(), onShows(), onSearch(), onRequests() }
+    // callbacks: { onSwitchProfile(), onHome(), onShows(), onMovies(), onSearch(), onRequests() }
     function renderShell(container, callbacks) {
         container.innerHTML = '';
         container.className = 'jq-shell';
@@ -4990,6 +4990,12 @@
         showsButton.textContent = 'Shows';
         showsButton.addEventListener('click', callbacks.onShows);
         rail.appendChild(showsButton);
+
+        var moviesButton = document.createElement('button');
+        moviesButton.className = 'jq-rail-item jq-focusable jq-nav-movies';
+        moviesButton.textContent = 'Movies';
+        moviesButton.addEventListener('click', callbacks.onMovies);
+        rail.appendChild(moviesButton);
 
         var searchButton = document.createElement('button');
         searchButton.className = 'jq-rail-item jq-focusable jq-nav-search';
@@ -5088,6 +5094,7 @@
             onSwitchProfile: function () { showProfiles(root); },
             onHome: showHome,
             onShows: showShows,
+            onMovies: showMovies,
             onSearch: showSearch,
             onRequests: showRequests,
         });
@@ -5115,6 +5122,15 @@
         showLibrary({
             title: 'Shows',
             includeItemTypes: 'Series',
+            sortBy: 'SortName',
+            sortOrder: 'Ascending',
+        }, showHome);
+    }
+
+    function showMovies() {
+        showLibrary({
+            title: 'Movies',
+            includeItemTypes: 'Movie',
             sortBy: 'SortName',
             sortOrder: 'Ascending',
         }, showHome);

@@ -127,7 +127,8 @@ async function assertMeasuredGeometry(page, cardHeight) {
 // is the one a viewer actually has.
 async function openViaRail(page, railClass) {
     await page.keyboard.press('ArrowLeft');
-    await page.waitForFunction(() => document.activeElement.classList.contains('jq-rail-item'));
+    assert.equal(await page.locator(':focus').evaluate(el => el.classList.contains('jq-rail-item')), true,
+        'Left must enter the rail');
     const railSize = await page.locator('.jq-rail-item').count();
     assert.ok(railSize > 0, 'the persistent rail must contain a destination');
     for (let i = 0; i < railSize; i++) await page.keyboard.press('ArrowUp');
@@ -139,6 +140,27 @@ async function openViaRail(page, railClass) {
         `never reached .${railClass} walking the rail`);
     await page.keyboard.press('Enter');
 }
+
+// Guard the already count-derived helper against a future seventh entry.
+test('openViaRail reaches the final destination with seven rendered items', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await signInAsAlice(page);
+        await page.evaluate(() => {
+            const button = document.createElement('button');
+            button.className = 'jq-rail-item jq-focusable jq-nav-seventh';
+            button.textContent = 'Seventh';
+            button.addEventListener('click', () => { window.__seventhOpened = true; });
+            document.querySelector('.jq-rail').appendChild(button);
+        });
+        assert.equal(await page.locator('.jq-rail-item').count(), 7);
+        await openViaRail(page, 'jq-nav-seventh');
+        assert.equal(await page.evaluate(() => window.__seventhOpened), true);
+    } finally {
+        await browser.close();
+    }
+});
 
 test('Home: ArrowRight reaches the last card and the "See All" button of a row wider than the screen', async () => {
     const browser = await chromium.launch();
