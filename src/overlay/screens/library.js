@@ -7,13 +7,66 @@
 (function () {
     'use strict';
 
-    var COLUMNS = 4;
-    // Twelve complete rows keep the polyfill's O(n) candidate sweep at 48
-    // cards. With 680 items in memory, real posters, the production polyfill,
-    // and 20x CPU throttling, current desktop Chromium measured 48.0ms median
-    // and 91.3ms worst over 100 ArrowDown presses. That desktop result is an
-    // optimistic lower bound, not an M63 or television measurement.
-    var WINDOW_SIZE = 48;
+    // Six 220px tracks with a 20px grid-gap. MEASURED at 1920x1080: the
+    // shell leaves 1920 - 268 (rail) - 96 (this screen's 48px padding) =
+    // 1556px of usable grid width. Six tracks need 6x220 + 5x20 = 1420px and
+    // fit with 136px spare; seven need 1660px and overflow. Four -- what this
+    // was -- left 616px of the content area empty, which is what the viewer
+    // reported as "only 4 cards wide".
+    //
+    // The inline gridTemplateColumns below interpolates this constant rather
+    // than repeating the number, so the track count and the window arithmetic
+    // cannot drift apart WITHIN this file. What can still drift is series.js,
+    // which carries its own copy of both -- and that matters: if the rendered
+    // track count and COLUMNS disagree, a window shift is no longer a whole
+    // number of visual rows, so cards reflow into different columns,
+    // cards[COLUMNS] in measureRowPitch() stops straddling a real row, and
+    // every virtual-padding and paging-row calculation here goes wrong. Change
+    // the two files together.
+    var COLUMNS = 6;
+    // Six complete rows. The polyfill's O(n) candidate sweep is bounded by
+    // MOUNTED CARDS, not by track count, so 36 is a smaller bound than the 48
+    // this file carried at four columns -- widening the grid and shrinking the
+    // window are independent knobs and this change turns both.
+    //
+    // WHY 36 RATHER THAN 48. Six columns alone costs measurably more per
+    // press: each window shift moves COLUMNS = 6 cards instead of 4, and up to
+    // 50% more artwork is on screen per row. MEASURED on one throttled desktop
+    // harness -- 680 items already in memory, real cached posters, the
+    // production polyfill, 20x CPU throttling, capture-phase keydown to the
+    // second requestAnimationFrame, 270 CURSOR-MOVING presses per
+    // configuration interleaved in ten-press blocks with the order rotated, so
+    // drift hits all three equally. Two independent replications:
+    //
+    //                 median       p90         p99          worst
+    //     4x48     51.0 / 50.4  64.2/65.8   74.0/82.3    84.3 /  88.2
+    //     6x48     57.8 / 57.9  72.9/73.6   99.5/93.7   110.4 / 101.8
+    //     6x36     51.8 / 52.0  66.6/66.7   81.9/82.1    90.2 / 103.3
+    //
+    // 6x36 beat 6x48 in 25 of 27 paired blocks in BOTH replications, for a
+    // ~10% better pooled median, and lands within 1.6-3.2% of the four-column
+    // median. An INDEPENDENT harness reproduced the median result (8-10% over
+    // 6x48, 21-22 of 27 paired blocks) and did NOT reproduce any tail gain:
+    // 4x48 had the lowest maximum in both of its replications too, and the p99
+    // comparison changed direction between them.
+    //
+    // THE SUPPORTABLE CLAIM, and it is the only one to repeat outside this
+    // file: the smaller window improves typical navigation time in desktop
+    // tests while allowing six columns. We have not established a worst-case
+    // improvement or television response time.
+    //
+    // Three limits behind that wording. (1) A throttled desktop Chromium is an
+    // OPTIMISTIC LOWER BOUND for Chromium M63 on the television; nothing here
+    // establishes M63 compliance. (2) The tail is NOT settled, on either
+    // harness -- 6x36's maximum was worse than four columns' in every
+    // replication run, and a coarser experiment exceeded 100ms at EVERY
+    // configuration. Six columns is not free. (3) The absolute numbers are not
+    // comparable to the 48.0ms/91.3ms this comment used to quote; that was a
+    // different machine, which is why 4x48 is re-measured here rather than
+    // carried over. They are also not comparable across harnesses that time
+    // keydown to the FIRST animation frame rather than the second, which is
+    // what the figures above use.
+    var WINDOW_SIZE = 36;
     var EDGE_ROWS = 2;
 
     // ---- Paging ---------------------------------------------------------
@@ -23,24 +76,35 @@
     // items) it reached 7% of the library and the rest was unreachable by any
     // key press. It now walks StartIndex/Limit pages as the cursor advances.
     //
-    // PAGE_SIZE = 2 * WINDOW_SIZE. The keypress cost measured for PR #24
-    // scales with MOUNTED cards, not fetched ones -- the 48.0ms/91.3ms figures
-    // above were taken with all 680 items already in memory -- so a larger
-    // page buys fewer round trips at no navigation cost. Two windows is the
-    // smallest size that (a) fills the initial 48-card window outright, so the
-    // screen is never short on arrival, and (b) leaves a whole spare window
-    // behind it, so the first page never needs a prefetch to have already
-    // landed. 714 items become 8 requests instead of 1 truncated one. It is
-    // also a multiple of COLUMNS, so a page boundary always falls on a row
-    // boundary and the only short row is still the last one -- the .jq-grid
-    // precondition in this file's opening comment.
+    // PAGE_SIZE and PREFETCH_REMAINING are INDEPENDENT LITERALS, not
+    // expressions of WINDOW_SIZE, and this comment used to state them as
+    // multiples of it -- which quietly became wrong the moment the mount
+    // window changed. Both are stated below in ROWS at today's COLUMNS,
+    // because rows are what a key press moves.
     //
-    // PREFETCH_REMAINING = WINDOW_SIZE. The next page is requested once the
-    // cursor comes within 48 items -- 12 ArrowDown presses -- of the end of
-    // what is loaded. At the measured 91.3ms worst-case press that is ~1.1s of
-    // headroom, and at the 48.0ms median ~0.58s. INFERRED, not measured: no
-    // figure for this server's page latency over the TV's own network exists,
-    // so this is a headroom budget, not a proof the page always wins the race.
+    // PAGE_SIZE = 96 is 16 complete rows at six columns. The keypress cost
+    // scales with MOUNTED cards, not fetched ones -- every timing figure above
+    // was taken with all 680 items already in memory -- so a larger page buys
+    // fewer round trips at no navigation cost. 96 (a) more than fills the
+    // 36-card mount window outright, so the screen is never short on arrival,
+    // and (b) leaves 60 items of loaded lead behind it, so the first page
+    // never needs a prefetch to have already landed. 714 items become 8
+    // requests instead of 1 truncated one. It is also a multiple of COLUMNS --
+    // 96 = 16 x 6, as WINDOW_SIZE 36 = 6 x 6 -- so a page boundary always
+    // falls on a row boundary and the only short row is still the last one,
+    // the .jq-grid precondition in this file's opening comment. Both
+    // divisibility facts must be rechecked whenever COLUMNS moves.
+    //
+    // PREFETCH_REMAINING = 48 is 8 rows at six columns; it was 12 rows when
+    // this grid had four, and shrinking the mount window from 48 to 36 does
+    // not touch it. So the next page is requested once the cursor comes within
+    // EIGHT ArrowDown presses of the end of what is loaded. At this file's
+    // measured worst-case press (~90-110ms on a throttled desktop) that is
+    // roughly 0.7-0.9s of headroom, and ~0.4s at the median. INFERRED, not
+    // measured: no figure for this server's page latency over the TV's own
+    // network exists, so this is a headroom budget, not a proof the page
+    // always wins the race -- and the presses it is counted in are desktop
+    // presses, so the real lead on an M63 set is unknown.
     //
     // If it loses, the cursor stops at the last loaded row until the page
     // lands, AND THEN HAS TO BE UNSTUCK. An earlier revision of this comment
@@ -50,7 +114,9 @@
     // mounted no new row, ArrowDown had no candidate, no focus event fired,
     // and downward traversal was stuck until the user happened to press Left
     // or Right. requestNextPage() therefore re-runs the forward window test
-    // itself once a page lands -- see extendWindowForward().
+    // itself once a page lands -- see extendWindowForward(), whose two
+    // branches (fill a short window, slide a full one) are both reachable from
+    // that path.
     //
     // The pre-rebuild overlay used Limit 70 with a prefetch at 14 cards
     // remaining. That is prior art, not a spec: 14 is under four rows, which
@@ -134,7 +200,7 @@
     // callbacks: { onSelectItem(item), onBack() }
     function renderLibrary(container, row, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-library-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-library-screen');
 
         var backButton = document.createElement('button');
         backButton.className = 'jq-back-button jq-focusable';
@@ -355,13 +421,72 @@
         // and by a page landing. Extracted rather than duplicated so the two
         // callers cannot drift apart -- the INVARIANT below is stated in terms
         // of exactly this arithmetic.
+        //
+        // TWO CASES, and conflating them cost a real cursor-loss bug. The
+        // INVARIANT's arithmetic is stated for a FULL window, where
+        // windowEnd = windowStart + WINDOW_SIZE. That equality does NOT hold
+        // while the window is still short: windowEnd is then bounded by
+        // items.length, so `windowEnd - EDGE_ROWS * COLUMNS` is an absolute
+        // index near the start of the list rather than a position near the end
+        // of a full window, and the slide fires far too early.
+        //
+        // MEASURED, and not hypothetical -- appendPage() explicitly accepts a
+        // short-but-positive first page and keeps paging. A first response of
+        // 13 items with TotalRecordCount 300, the cursor moved to index 1,
+        // then 96 more items delivered: the slide test reads 1 >= 13 - 12,
+        // fires, advances the start to 6 and REMOVES THE FOCUSED CARD. Focus
+        // landed on <body>. Shrinking WINDOW_SIZE does not repair it; the
+        // threshold is wrong, not the size.
+        //
+        // A short window does not need to slide -- it needs to FILL.
+        // moveWindow(windowStart) keeps the start where it is and only extends
+        // the end, so its removal loop is empty and the focused card cannot be
+        // in it whatever the index. That is unconditional focus safety, not an
+        // arithmetic margin.
+        //
+        // BUT FILLING ALONE IS NOT ENOUGH, and stopping there was a second
+        // bug, with the same user-visible symptom as the one PR #25 fixed: a
+        // cursor that stops responding to Down and only recovers if the viewer
+        // happens to press Left or Right. On a remote that reads as a broken
+        // key. An earlier revision of this comment claimed filling was
+        // "strictly better at unsticking downward traversal than a one-row
+        // slide". That was false for a cursor sitting on the LAST LOADED ROW,
+        // which is exactly where a viewer waiting for a page is.
+        //
+        // MEASURED before the fix, with real key presses:
+        //   31 items, cursor at index 30, then 96 more delivered. The window
+        //   filled [0,36) and returned. Index 36 was never mounted; four
+        //   Downs left the cursor on 30; Right-then-Left-then-Down reached 36.
+        //   37 items, cursor at index 36, old window [6,37): filled to [6,42)
+        //   and returned; index 42 absent; same strand, same lateral recovery.
+        // Both advance on the previous implementation, so this was the fill
+        // logic, not the mount size.
+        //
+        // So FILL THEN SLIDE, explicitly and in that order -- never slide
+        // first, which is what evicted the focused card when the window was
+        // short. Filling makes the window full (or exhausts the loaded items),
+        // and only then does the ordinary slide test apply, on a window that
+        // satisfies its precondition. One slide is enough: see the INVARIANT.
         function extendWindowForward(index) {
             if (index === null) return false;
-            if (index >= windowEnd - EDGE_ROWS * COLUMNS && windowEnd < items.length) {
+            if (windowEnd >= items.length) return false;
+            var filled = false;
+            if (windowEnd - windowStart < WINDOW_SIZE) {
+                // FILLING. Append-only; nothing is removed.
+                moveWindow(windowStart);
+                filled = true;
+                // Filling can only leave the window short by mounting every
+                // loaded item, and then there is nothing below to reach.
+                if (windowEnd >= items.length) return true;
+            }
+            // SLIDING. windowEnd = windowStart + WINDOW_SIZE holds from here,
+            // whether it did on entry or the fill above established it, so the
+            // INVARIANT's forward derivation applies.
+            if (index >= windowEnd - EDGE_ROWS * COLUMNS) {
                 moveWindow(windowStart + COLUMNS);
                 return true;
             }
-            return false;
+            return filled;
         }
 
         function createCard(index) {
@@ -435,38 +560,102 @@
 
         // INVARIANT: moveWindow() must keep the focused index inside
         // [nextStart, nextEnd), so its node stays attached throughout the
-        // synchronous update. Re-check this if WINDOW_SIZE, COLUMNS,
-        // EDGE_ROWS, either trigger threshold, or the +/- COLUMNS step changes.
-        // With today's 48/4/2 values, a down move requires
-        // index >= windowEnd - 8 = windowStart + 40, while nextStart is only
-        // windowStart + 4. An up move requires index < windowStart + 8, while
-        // nextEnd is (windowStart - 4) + 48 = windowStart + 44. Thus neither
-        // edge-removal loop can include the focused index. This is guaranteed
-        // by that arithmetic, not by a runtime assertion.
+        // synchronous update. It is ARITHMETIC -- nothing checks it at run
+        // time, so the derivation below is the whole guarantee. Re-derive it,
+        // do not adjust it, if WINDOW_SIZE, COLUMNS, EDGE_ROWS, either trigger
+        // threshold or the +/- COLUMNS step changes.
+        //
+        // SCOPE FIRST, because getting this wrong is what shipped a
+        // cursor-loss bug -- and an earlier revision of this note then
+        // overstated the correction, claiming that NO shift happens on a short
+        // window. That is false: a TERMINAL short window, one clipped by the
+        // end of the loaded items, still slides UP. Precisely:
+        //
+        //   * FORWARD sliding requires a full window, windowEnd = windowStart
+        //     + WINDOW_SIZE. extendWindowForward() guarantees it by filling a
+        //     short window first, in a separate removal-free step -- see the
+        //     two cases documented there.
+        //   * BACKWARD sliding needs no such precondition, and the derivation
+        //     below is written without one. It runs on the terminal short
+        //     window every time a viewer walks back up from the end of a
+        //     library.
+        //
+        // Write S for windowStart, W for WINDOW_SIZE, C for COLUMNS, E for
+        // EDGE_ROWS, N for items.length and i for the focused index. S is
+        // always a multiple of C: it starts at 0, steps by +/- C, and
+        // moveWindow()'s two clamps are 0 and Math.ceil(.../C) * C. So every
+        // step below is exactly one visual row and the row grid never falls
+        // out of phase.
+        //
+        // RE-DERIVED at today's W = 36, C = 6, E = 2 (this grid was 48/4/2
+        // before six columns, and 36/6/2 is a second change on top):
+        //
+        //   DOWN. Triggers at i >= windowEnd - E*C = S + W - 12 = S + 24, so
+        //   i is in [S + 24, S + 36). nextStart = S + 6 and nextEnd =
+        //   min(N, S + 42); the branch only runs while windowEnd < N, i.e.
+        //   N > S + 36, so nextEnd >= S + 37. The removal ranges are
+        //   index < S + 6 and index >= nextEnd. i >= S + 24 clears the first
+        //   by 18, and i <= S + 35 clears the second by at least 2.
+        //
+        //   UP. NO fullness assumption -- this is the branch that runs on the
+        //   terminal short window. Triggers at i < S + E*C = S + 12 with
+        //   S > 0. i is a MOUNTED index, so i is in [S, windowEnd) and
+        //   windowEnd <= min(N, S + 36); combining, i is in [S, S + 12).
+        //   nextStart = S - 6 (S > 0 and S is a multiple of 6, so this is >= 0,
+        //   and it is <= the aligned maximum start because S already was).
+        //   nextEnd = min(N, S + 30). The removal ranges are index < S - 6 and
+        //   index >= nextEnd. i >= S clears the first by 6. For the second,
+        //   i < S + 12 <= S + 30 and i < windowEnd <= N, so i < min(N, S + 30)
+        //   whichever term wins -- by 18 when the window is full, and by at
+        //   least 1 at the terminal window.
+        //
+        // GENERALLY: DOWN needs W - E*C >= C and UP needs W - C >= E*C. Both
+        // reduce to W >= C * (E + 1) = 18 at today's C and E. That LOWER BOUND
+        // is the first thing to check if the mount window is ever reduced
+        // again -- 36 clears it by a factor of two, and every margin quoted
+        // above shrinks linearly with W until it is reached. Below 18 the
+        // trigger zone and the removal range overlap and the focused card can
+        // be evicted; at exactly 18 they touch with zero margin, which is not
+        // a state to ship.
         //
         // Paging adds one more caller: requestNextPage() calls
-        // extendWindowForward(focusedIndex()) when a page lands. That is the
-        // SAME test and the SAME +COLUMNS step as the down branch below, so
-        // the arithmetic above covers it unchanged -- the focused index is
-        // >= windowStart + 40 when it fires, nextStart is windowStart + 4, and
-        // nextEnd is windowStart + 52, so the focused card is in neither
-        // removal range. One step is enough to unstick downward traversal: the
-        // row below the focused card is at most index + COLUMNS <=
-        // windowStart + 51, which is inside the new [nextStart, nextEnd).
+        // extendWindowForward(focusedIndex()) when a page lands. It may FILL
+        // first -- removal-free, and it moves no index, so the derivation
+        // below applies to whatever it hands on -- and then runs the SAME down
+        // test with the SAME +C step, on a window the fill has made full. So
+        // the derivation covers the paging path unchanged.
         //
-        // Note that it is NOT an append-only operation: moveWindow() removes
-        // the COLUMNS cards that fall below the new nextStart before appending
-        // the trailing ones. That is safe for the reason above -- the focused
-        // index is provably outside that removal range -- not because nothing
-        // is removed.
+        // ONE STEP IS ENOUGH to unstick downward traversal, which is what
+        // makes the fill-then-slide pair sufficient rather than needing a
+        // loop. After the slide the row below the focused card is at index
+        // i + C <= (S + 35) + 6 = S + 41, and nextEnd is min(N, S + 42): if
+        // N >= S + 42 that row is below S + 42, and if N < S + 42 the row
+        // exists only when i + C < N = nextEnd. Either way it is inside
+        // [nextStart, nextEnd). Filling ALONE is not enough -- it mounts rows
+        // above and beside the cursor but none below it, which is why the
+        // slide must still be evaluated afterwards.
+        //
+        // Note that sliding is NOT an append-only operation: moveWindow()
+        // removes the C cards that fall below the new nextStart before
+        // appending the trailing ones. That is safe for the reason above --
+        // the focused index is provably outside that removal range -- not
+        // because nothing is removed.
         //
         // It cannot raise the mounted-card bound either: nextEnd is capped at
         // nextStart + WINDOW_SIZE regardless of how many pages were fetched.
+        // The window resting on the LAST row is smaller than that bound, not
+        // larger: the ceil clamp puts nextStart on a row boundary, so at
+        // N = 680 it is 648 and 32 cards are mounted (44 at W = 48).
         //
         // Only the FORWARD branch runs on a page landing. An append adds items
         // at the END, so it can never make an item behind the cursor newly
         // available, and running the backward branch would mutate the DOM for
         // no reason the user asked for.
+        //
+        // Two divisibility facts the rest of the screen leans on also survive:
+        // WINDOW_SIZE 36 and PAGE_SIZE 96 are both multiples of COLUMNS = 6,
+        // so a window edge and a page boundary each still fall on a row
+        // boundary.
         grid.addEventListener('focus', function (event) {
             var focused = event.target;
             var index = focused._jqLibraryIndex;

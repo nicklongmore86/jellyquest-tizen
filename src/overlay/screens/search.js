@@ -9,7 +9,7 @@
     // callbacks: { onSelectItem(item) }
     function renderSearch(container, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-search-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-search-screen');
 
         var input = document.createElement('input');
         input.type = 'search';

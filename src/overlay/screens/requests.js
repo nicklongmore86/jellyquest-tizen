@@ -26,7 +26,7 @@
     // focusAtRequest, onRetryConfiguration }
     function renderRequests(container, config) {
         container.innerHTML = '';
-        container.className = 'jq-requests-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-requests-screen');
 
         var status = document.createElement('p');
         status.className = 'jq-requests-status';

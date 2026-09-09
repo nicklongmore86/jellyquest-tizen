@@ -12,6 +12,32 @@
 
     var contentEl = null;
 
+    // The structural classes the shell's content <main> must always carry.
+    // .jq-shell-content is what gives it `flex: 1 1 auto` (shell.css), i.e.
+    // the whole width left of the rail; without it the content box
+    // shrink-wraps its own contents and every screen hugs the left edge
+    // after the 268px rail.
+    //
+    // Every screen renderer assigns container.className outright, which is
+    // how this class was silently lost on all six of them from the first
+    // revision each was written -- MEASURED at 1920x1080 before the fix:
+    // Search and Requests 696px wide, Library and Series 1036px, Detail
+    // 733px, against a 1652px content area. Home was full width only by
+    // accident, its long horizontal rows being intrinsically wide enough to
+    // mask the loss. Renderers therefore ask for their class through
+    // contentClassName() rather than spelling the structural half out again,
+    // so a new screen cannot drop it by writing the obvious thing.
+    //
+    // NOT for the profile picker: profiles.js replaces the top-level root
+    // after the shell has been removed (app.js showProfiles), so its
+    // container never is this <main> and it centres itself instead
+    // (profiles.css).
+    var CONTENT_CLASS = 'jq-content jq-shell-content';
+
+    function contentClassName(screenClass) {
+        return CONTENT_CLASS + ' ' + screenClass;
+    }
+
     // callbacks: { onSwitchProfile(), onHome(), onShows(), onMovies(), onSearch(), onRequests() }
     function renderShell(container, callbacks) {
         container.innerHTML = '';
@@ -65,7 +91,7 @@
         container.appendChild(rail);
 
         contentEl = document.createElement('main');
-        contentEl.className = 'jq-content jq-shell-content';
+        contentEl.className = CONTENT_CLASS;
         container.appendChild(contentEl);
 
         // The rail outlives every content screen, so it is the one thing
@@ -81,6 +107,7 @@
 
     window.JellyQuestShell = {
         render: renderShell,
-        getContent: getContent
+        getContent: getContent,
+        contentClassName: contentClassName
     };
 })();

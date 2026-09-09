@@ -11,8 +11,10 @@ const server = await startServer();
 const simulatorUrl = `${server.baseUrl}/dev/simulator.html`;
 test.after(() => server.close());
 
-const WINDOW_SIZE = 48;
-const COLUMNS = 4;
+const WINDOW_SIZE = 36;
+// src/overlay/screens/series.js's episode-grid track count -- the duplicate
+// of library.js's. See that file's COLUMNS comment.
+const COLUMNS = 6;
 
 async function withPage(run) {
     const browser = await chromium.launch();
@@ -561,9 +563,55 @@ test('a season larger than one window mounts at most a window and traverses both
         };
         assert.equal((await assertWindow()).length, WINDOW_SIZE);
 
+        // PRECONDITIONS, and they are not decoration. Up is the direction that
+        // strands -- the polyfill rejects a candidate whose top-left corner is
+        // negative, so a row only half revealed above the scrollport is
+        // discarded outright -- and what decides whether a fixture CAN strand
+        // is its container's scroll RANGE against one row's pitch, not its row
+        // count. A grid too shallow to strand passes an up-traversal test
+        // however broken the reveal margin is, and that vacuity has been found
+        // in this repo more than once. Library asserts measured box and range
+        // (library-windowing.spec.mjs); this screen asserted neither until now.
+        //
+        // BOTH THRESHOLDS BELOW ARE ABSOLUTE, deliberately. A bound written
+        // relative to the fixture -- range > pitch * (rows - windowRows), say
+        // -- weakens exactly as the fixture shrinks, so it goes vacuous in the
+        // one case it exists to catch. That was written here first, and a
+        // mutant fixture of 42 episodes passed it.
+        //
+        // MEASURED at this 346-episode fixture: a 224px row pitch and 12,159px
+        // of scroll range, i.e. 54 pitches. The same probe at 42 episodes
+        // gives 735px of range, 3.3 pitches. The threshold sits in that gap.
+        const STRANDING_PITCHES = 40;
+        const MINIMUM_WINDOW_MULTIPLE = 4;
+        const geometry = await page.evaluate((COLUMNS) => {
+            const cards = document.querySelectorAll('.jq-series-episodes .jq-media-card');
+            const first = cards[0].getBoundingClientRect();
+            const screen = document.querySelector('.jq-series-screen');
+            return {
+                width: Math.round(first.width),
+                height: Math.round(first.height),
+                pitch: Math.round(cards[COLUMNS].getBoundingClientRect().top - first.top),
+                range: screen.scrollHeight - screen.clientHeight,
+                template: getComputedStyle(document.querySelector('.jq-series-episodes')).gridTemplateColumns,
+            };
+        }, COLUMNS);
+        // The row arithmetic below describes this grid only if the grid really
+        // renders COLUMNS tracks at the episode-still box.
+        assert.equal(geometry.template, Array(COLUMNS).fill('220px').join(' '),
+            'the episode grid must render exactly COLUMNS 220px tracks');
+        assert.deepEqual({ width: geometry.width, height: geometry.height }, { width: 220, height: 204 },
+            'episode cards must actually render at the 220x204 still box');
+        assert.ok(geometry.range > geometry.pitch * STRANDING_PITCHES,
+            `the fixture must scroll far enough to strand the return trip: `
+            + `${geometry.range}px of range against a ${geometry.pitch}px row pitch`);
+        const rows = Math.ceil(EPISODE_COUNT / COLUMNS);
+        assert.ok(rows >= MINIMUM_WINDOW_MULTIPLE * (WINDOW_SIZE / COLUMNS),
+            `the fixture season must be several mounted windows deep: ${rows} rows `
+            + `against a ${WINDOW_SIZE / COLUMNS}-row window`);
+
         // Into the grid, then all the way down and all the way back up.
         assert.equal((await pressAndAssertFocus(page, 'ArrowDown')).id, 'deep-1');
-        const rows = Math.ceil(EPISODE_COUNT / COLUMNS);
         for (let row = 1; row < rows; row++) {
             const focus = await pressAndAssertFocus(page, 'ArrowDown');
             assert.equal(focus.id, 'deep-' + (row * COLUMNS + 1));

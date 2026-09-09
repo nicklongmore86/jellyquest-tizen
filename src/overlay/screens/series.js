@@ -71,8 +71,23 @@
     // per-season split is INFERRED, not probed), and a single-season show of
     // several hundred episodes is a shape nobody has ruled out. The window is
     // the guard for that case.
-    var COLUMNS = 4;
-    var WINDOW_SIZE = 48;
+    // Six 220px tracks, matching library.js -- see its constant for the
+    // measurement. Briefly: at 1920x1080 this screen has 1920 - 268 (rail)
+    // - 96 (48px padding) = 1556px of usable grid width, six tracks need
+    // 6x220 + 5x20 = 1420px and fit, seven need 1660px and overflow. Four
+    // left 616px of the content area empty, which is what the viewer
+    // reported as episode lists being "only 4 cards wide".
+    //
+    // This is the DUPLICATE library.js's header warns about. COLUMNS and the
+    // inline gridTemplateColumns below are one number in this file, but the
+    // pair of files is not -- change both together or the window arithmetic
+    // and the rendered rows come apart.
+    var COLUMNS = 6;
+    // Six complete rows, matching library.js -- see its WINDOW_SIZE comment
+    // for the measurement that chose 36 over 48. The mount bound is on CARDS,
+    // so widening the grid did not raise it and narrowing the window lowers
+    // it: this is now six rows of six, where it was twelve rows of four.
+    var WINDOW_SIZE = 36;
     var EDGE_ROWS = 2;
 
     // callbacks: {
@@ -85,7 +100,7 @@
     // }
     function renderSeries(container, item, callbacks) {
         container.innerHTML = '';
-        container.className = 'jq-series-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-series-screen');
 
         var heading = document.createElement('h1');
         heading.className = 'jq-detail-title jq-series-title';
@@ -564,19 +579,68 @@
 
             // INVARIANT: moveWindow() must keep the focused index inside
             // [nextStart, nextEnd), so the focused node stays attached across
-            // the synchronous update. Re-check this if WINDOW_SIZE, COLUMNS,
-            // EDGE_ROWS or the +/- COLUMNS step changes -- and re-check
-            // library.js's copy of the same arithmetic with it.
-            // With 48/4/2: a down move requires index >= windowEnd - 8 =
-            // windowStart + 40 while nextStart is only windowStart + 4; an up
-            // move requires index < windowStart + 8 while nextEnd is
-            // (windowStart - 4) + 48 = windowStart + 44. Neither removal
-            // range can contain the focused index. Guaranteed by that
-            // arithmetic, not by a runtime assertion.
+            // the synchronous update. It is ARITHMETIC: nothing checks it at
+            // run time. Re-derive it, do not adjust it, if WINDOW_SIZE,
+            // COLUMNS, EDGE_ROWS or the +/- COLUMNS step changes -- and
+            // re-derive library.js's copy with it.
             //
-            // Unlike library.js there is no paging caller: the series arrives
-            // whole and this season partition never grows, so this is the
-            // only mutator.
+            // Write S for windowStart, W for WINDOW_SIZE, C for COLUMNS, E for
+            // EDGE_ROWS, N for items.length and i for the focused index. S is
+            // always a multiple of C -- it starts at 0, steps by +/- C, and
+            // both of moveWindow()'s clamps are multiples of C -- so every
+            // step is exactly one visual row.
+            //
+            // SCOPE. An earlier revision of this note claimed every shift
+            // here runs on a full window. That is wrong: the FORWARD shift
+            // does, because its own test refuses a window whose end is the
+            // item count -- but the BACKWARD shift runs on the TERMINAL SHORT
+            // window every time a viewer walks back up from the end of a long
+            // season. So the up derivation below assumes nothing about
+            // fullness, and only the down one does.
+            //
+            // RE-DERIVED at today's W = 36, C = 6, E = 2 (this screen was
+            // 48/4/2 before six columns, and 36/6/2 is a second change on
+            // top):
+            //
+            //   DOWN triggers at i >= windowEnd - E*C = S + 24, so i is in
+            //   [S + 24, S + 36). nextStart = S + 6, nextEnd = min(N, S + 42),
+            //   and the branch only runs while windowEnd < N, so nextEnd is at
+            //   least S + 37. The removal ranges -- below S + 6, and at or
+            //   above nextEnd -- both miss i, by 18 and by at least 2.
+            //
+            //   UP triggers at i < S + E*C = S + 12 with S > 0. i is a
+            //   MOUNTED index, so i is in [S, windowEnd) and therefore in
+            //   [S, S + 12). nextStart = S - 6 and nextEnd = min(N, S + 30).
+            //   The removal ranges are below S - 6, which i >= S clears by 6,
+            //   and at or above nextEnd, which i clears because i < S + 12 <=
+            //   S + 30 and i < windowEnd <= N. NO fullness is assumed, which
+            //   is what makes this hold at the terminal short window -- the
+            //   32-card [648,680) state on a 680-item list, for one.
+            //
+            // GENERALLY: DOWN needs W - E*C >= C and UP needs W - C >= E*C.
+            // Both reduce to W >= C * (E + 1) = 18 at today's C and E. That
+            // LOWER BOUND is what to check first if the mount window is ever
+            // reduced again: 36 clears it by a factor of two, every margin
+            // above shrinks linearly with W until it is reached, and below 18
+            // the trigger zone overlaps the removal range and the focused card
+            // can be evicted.
+            //
+            // WHY NO FILL BRANCH IS NEEDED HERE, which is the one thing
+            // library.js could not do without. This screen does not page: a
+            // season's episode list arrives whole and `items` never grows
+            // after mountEpisodes() -- a season change replaces the whole
+            // closure rather than appending to it. So a short window is short
+            // because it already holds every REMAINING item, i.e.
+            // windowEnd === items.length, which is precisely what the down
+            // branch below refuses. (That is the tail of the season, not the
+            // whole season; an earlier revision of this note said otherwise.)
+            // Nothing can ever append items underneath the cursor here, so
+            // there is no state where a window must be filled before it can
+            // slide. If paging is ever added to this screen, library.js's
+            // fill-then-slide branch has to come with it.
+            //
+            // WINDOW_SIZE 36 is a multiple of COLUMNS = 6, so a window edge
+            // still falls on a row boundary.
             episodeWindow = {
                 onFocus: function (focused) {
                     var focusedIndex = focused._jqSeriesIndex;

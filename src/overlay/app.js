@@ -283,7 +283,7 @@
         // items get a visible state and a remote-safe exit.
         if (!canPlay(item, false)) {
             container.innerHTML = '';
-            container.className = 'jq-detail-screen';
+            container.className = window.JellyQuestShell.contentClassName('jq-detail-screen');
             var heading = document.createElement('h1');
             heading.className = 'jq-detail-title';
             heading.textContent = item && item.Name ? item.Name : 'Unavailable item';
@@ -345,7 +345,7 @@
         var container = window.JellyQuestShell.getContent();
         var user = window.JellyQuestSession.getCurrentProfile();
         container.innerHTML = '';
-        container.className = 'jq-requests-screen';
+        container.className = window.JellyQuestShell.contentClassName('jq-requests-screen');
         var loading = document.createElement('p');
         loading.className = 'jq-requests-status';
         loading.textContent = 'Loading Requests configuration…';
