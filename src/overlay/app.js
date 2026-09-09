@@ -365,6 +365,109 @@
         });
     }
 
+    // Subscribe during script boot, including when the upstream bundle loads
+    // later. Its patched singleton calls this handshake before playback can run.
+    var playbackSubscribed = false;
+    var playbackHidden = false;
+    var playbackFocus = null;
+    var playbackIdleSince = null;
+    var playbackHandoffAt = null;
+
+    // Capture the actual focus placement, synchronously after it happened and
+    // before any async playback work. At playbackstart upstream may already
+    // have moved focus to its OSD. Never replace this with a render-start anchor.
+    document.addEventListener('focus', function (event) {
+        var root = document.getElementById('jellyquest-root');
+        if (!playbackHidden && root && root.contains(event.target)) {
+            playbackFocus = event.target;
+        }
+    }, true);
+
+    function restorePlaybackOverlay() {
+        var root = document.getElementById('jellyquest-root');
+        if (!root) return;
+        try {
+            root.style.display = '';
+            playbackHidden = false;
+            playbackIdleSince = null;
+            playbackHandoffAt = null;
+            var target = playbackFocus;
+            if (target && root.contains(target) && !target.disabled && target.getClientRects().length) {
+                target.focus();
+            }
+            if (!root.contains(document.activeElement)) {
+                var candidates = root.querySelectorAll('button:not([disabled]), a[href], [tabindex="0"]');
+                for (var i = 0; i < candidates.length; i++) {
+                    if (candidates[i].getClientRects().length) {
+                        candidates[i].focus();
+                        if (document.activeElement === candidates[i]) break;
+                    }
+                }
+            }
+        } catch (error) {
+            // Events.trigger does not isolate listeners. Visibility is restored
+            // FIRST, so even a throwing focus helper cannot strand the overlay.
+            console.error('[JellyQuest] Playback focus restore failed:', error);
+        }
+    }
+
+    window.JellyQuestBindPlayback = function () {
+        if (playbackSubscribed || !window.JellyQuestPlaybackEvents) return;
+        playbackSubscribed = true;
+        window.JellyQuestPlaybackEvents('playbackstart', function (_event, _player, state) {
+            try {
+                if (!state || !state.NowPlayingItem || state.NowPlayingItem.MediaType !== 'Video') return;
+                var root = document.getElementById('jellyquest-root');
+                if (!root) return;
+                playbackHidden = true;
+                playbackIdleSince = null;
+                playbackHandoffAt = null;
+                root.style.display = 'none';
+                if (root.contains(document.activeElement)) document.activeElement.blur();
+            } catch (error) {
+                console.error('[JellyQuest] Playback overlay handoff failed:', error);
+                restorePlaybackOverlay();
+            }
+        });
+        window.JellyQuestPlaybackEvents('playbackstop', function (_event, info) {
+            if (!playbackHidden) return;
+            // Intros, queue advances and player switches emit stop BEFORE the
+            // next start. Leave them hidden; polling recovers silent failures.
+            if (info && info.nextItem) {
+                playbackHandoffAt = Date.now();
+                return;
+            }
+            restorePlaybackOverlay();
+        });
+        window.JellyQuestPlaybackEvents('playbackcancelled', function () {
+            if (playbackHidden) restorePlaybackOverlay();
+        });
+        // No playbackerror subscription: its terminal path emits stop; stream
+        // changes can suppress stop and must retain the video surface.
+    };
+    window.JellyQuestBindPlayback();
+
+    // A false reading must persist for five seconds to tolerate ordinary queue
+    // and stream-change gaps. This is a recovery heuristic, not a proven upper
+    // bound on TV startup. See docs/playback-overlay.md for residual gaps.
+    window.setInterval(function () {
+        if (!playbackHidden) return;
+        // currentSrc can stay non-null after an ended item. An explicit
+        // nextItem stop without a subsequent start therefore needs its own
+        // deadline, independent of the accessor (including cinema intros).
+        if (playbackHandoffAt !== null && Date.now() - playbackHandoffAt >= 15000) {
+            restorePlaybackOverlay();
+            return;
+        }
+        if (isVideoPlaying()) {
+            playbackIdleSince = null;
+        } else if (playbackIdleSince === null) {
+            playbackIdleSince = Date.now();
+        } else if (Date.now() - playbackIdleSince >= 5000) {
+            restorePlaybackOverlay();
+        }
+    }, 1000);
+
     // ---- Root-level Back: the exit confirmation -------------------------
     //
     // Samsung's certification policy (CO-US-05, "Terminating Applications")
@@ -542,6 +645,7 @@
 
     document.addEventListener('keydown', function (event) {
         if (BACK_KEY_CODES.indexOf(event.keyCode) === -1) return;
+        if (playbackHidden || isVideoPlaying()) return;
         // An open modal (e.g. Detail's Playback Options) owns Back first,
         // closing itself rather than navigating the whole screen away --
         // see DETAIL_ACTIONS.md's "Left or Back returns one level before
