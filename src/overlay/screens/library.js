@@ -45,19 +45,27 @@
     //
     // 6x36 beat 6x48 in 25 of 27 paired blocks in BOTH replications, for a
     // ~10% better pooled median, and lands within 1.6-3.2% of the four-column
-    // median while filling the screen. So six columns with a smaller mount
-    // window is not a trade against 4x48 at the median -- it is level with it.
+    // median. An INDEPENDENT harness reproduced the median result (8-10% over
+    // 6x48, 21-22 of 27 paired blocks) and did NOT reproduce any tail gain:
+    // 4x48 had the lowest maximum in both of its replications too, and the p99
+    // comparison changed direction between them.
     //
-    // READ THE LIMITS, all three. (1) A throttled desktop Chromium is an
-    // OPTIMISTIC LOWER BOUND for Chromium M63 on the television, not a
-    // television measurement; nothing here establishes M63 compliance.
-    // (2) The tail is NOT settled. 4x48 had the best worst-case sample in both
-    // of these replications, and a coarser experiment on a different harness
-    // exceeded 100ms at EVERY configuration -- so these figures establish a
-    // median improvement, not stable tail latency. (3) The absolute numbers
-    // are not comparable to the 48.0ms/91.3ms this comment used to quote; that
-    // was a different machine, which is why 4x48 is re-measured here rather
-    // than carried over.
+    // THE SUPPORTABLE CLAIM, and it is the only one to repeat outside this
+    // file: the smaller window improves typical navigation time in desktop
+    // tests while allowing six columns. We have not established a worst-case
+    // improvement or television response time.
+    //
+    // Three limits behind that wording. (1) A throttled desktop Chromium is an
+    // OPTIMISTIC LOWER BOUND for Chromium M63 on the television; nothing here
+    // establishes M63 compliance. (2) The tail is NOT settled, on either
+    // harness -- 6x36's maximum was worse than four columns' in every
+    // replication run, and a coarser experiment exceeded 100ms at EVERY
+    // configuration. Six columns is not free. (3) The absolute numbers are not
+    // comparable to the 48.0ms/91.3ms this comment used to quote; that was a
+    // different machine, which is why 4x48 is re-measured here rather than
+    // carried over. They are also not comparable across harnesses that time
+    // keydown to the FIRST animation frame rather than the second, which is
+    // what the figures above use.
     var WINDOW_SIZE = 36;
     var EDGE_ROWS = 2;
 
@@ -430,28 +438,55 @@
         // landed on <body>. Shrinking WINDOW_SIZE does not repair it; the
         // threshold is wrong, not the size.
         //
-        // A short window does not need to slide at all -- it needs to FILL.
+        // A short window does not need to slide -- it needs to FILL.
         // moveWindow(windowStart) keeps the start where it is and only extends
         // the end, so its removal loop is empty and the focused card cannot be
         // in it whatever the index. That is unconditional focus safety, not an
-        // arithmetic margin, and it is also strictly better at unsticking
-        // downward traversal than a one-row slide: it mounts every row the
-        // arriving page made available, up to the mount bound.
+        // arithmetic margin.
+        //
+        // BUT FILLING ALONE IS NOT ENOUGH, and stopping there was a second
+        // bug, with the same user-visible symptom as the one PR #25 fixed: a
+        // cursor that stops responding to Down and only recovers if the viewer
+        // happens to press Left or Right. On a remote that reads as a broken
+        // key. An earlier revision of this comment claimed filling was
+        // "strictly better at unsticking downward traversal than a one-row
+        // slide". That was false for a cursor sitting on the LAST LOADED ROW,
+        // which is exactly where a viewer waiting for a page is.
+        //
+        // MEASURED before the fix, with real key presses:
+        //   31 items, cursor at index 30, then 96 more delivered. The window
+        //   filled [0,36) and returned. Index 36 was never mounted; four
+        //   Downs left the cursor on 30; Right-then-Left-then-Down reached 36.
+        //   37 items, cursor at index 36, old window [6,37): filled to [6,42)
+        //   and returned; index 42 absent; same strand, same lateral recovery.
+        // Both advance on the previous implementation, so this was the fill
+        // logic, not the mount size.
+        //
+        // So FILL THEN SLIDE, explicitly and in that order -- never slide
+        // first, which is what evicted the focused card when the window was
+        // short. Filling makes the window full (or exhausts the loaded items),
+        // and only then does the ordinary slide test apply, on a window that
+        // satisfies its precondition. One slide is enough: see the INVARIANT.
         function extendWindowForward(index) {
             if (index === null) return false;
             if (windowEnd >= items.length) return false;
+            var filled = false;
             if (windowEnd - windowStart < WINDOW_SIZE) {
                 // FILLING. Append-only; nothing is removed.
                 moveWindow(windowStart);
-                return true;
+                filled = true;
+                // Filling can only leave the window short by mounting every
+                // loaded item, and then there is nothing below to reach.
+                if (windowEnd >= items.length) return true;
             }
-            // SLIDING a full window. From here windowEnd = windowStart +
-            // WINDOW_SIZE holds and the INVARIANT below applies.
+            // SLIDING. windowEnd = windowStart + WINDOW_SIZE holds from here,
+            // whether it did on entry or the fill above established it, so the
+            // INVARIANT's forward derivation applies.
             if (index >= windowEnd - EDGE_ROWS * COLUMNS) {
                 moveWindow(windowStart + COLUMNS);
                 return true;
             }
-            return false;
+            return filled;
         }
 
         function createCard(index) {
@@ -531,11 +566,19 @@
         // threshold or the +/- COLUMNS step changes.
         //
         // SCOPE FIRST, because getting this wrong is what shipped a
-        // cursor-loss bug: everything below is about SLIDING A FULL WINDOW,
-        // where windowEnd = windowStart + WINDOW_SIZE. extendWindowForward()
-        // now guarantees that precondition by handling a short window in a
-        // separate, removal-free branch -- see the two cases documented there.
-        // A short window slides nowhere, so it needs no margin at all.
+        // cursor-loss bug -- and an earlier revision of this note then
+        // overstated the correction, claiming that NO shift happens on a short
+        // window. That is false: a TERMINAL short window, one clipped by the
+        // end of the loaded items, still slides UP. Precisely:
+        //
+        //   * FORWARD sliding requires a full window, windowEnd = windowStart
+        //     + WINDOW_SIZE. extendWindowForward() guarantees it by filling a
+        //     short window first, in a separate removal-free step -- see the
+        //     two cases documented there.
+        //   * BACKWARD sliding needs no such precondition, and the derivation
+        //     below is written without one. It runs on the terminal short
+        //     window every time a viewer walks back up from the end of a
+        //     library.
         //
         // Write S for windowStart, W for WINDOW_SIZE, C for COLUMNS, E for
         // EDGE_ROWS, N for items.length and i for the focused index. S is
@@ -554,11 +597,17 @@
         //   index < S + 6 and index >= nextEnd. i >= S + 24 clears the first
         //   by 18, and i <= S + 35 clears the second by at least 2.
         //
-        //   UP. Triggers at i < S + E*C = S + 12 with S > 0, so i is in
-        //   [S, S + 12). nextStart = S - 6 and nextEnd = min(N, S + 30) =
-        //   S + 30, since a full window means N >= S + 36. The removal ranges
-        //   are index < S - 6 and index >= S + 30. i >= S clears the first by
-        //   6, and i <= S + 11 clears the second by 18.
+        //   UP. NO fullness assumption -- this is the branch that runs on the
+        //   terminal short window. Triggers at i < S + E*C = S + 12 with
+        //   S > 0. i is a MOUNTED index, so i is in [S, windowEnd) and
+        //   windowEnd <= min(N, S + 36); combining, i is in [S, S + 12).
+        //   nextStart = S - 6 (S > 0 and S is a multiple of 6, so this is >= 0,
+        //   and it is <= the aligned maximum start because S already was).
+        //   nextEnd = min(N, S + 30). The removal ranges are index < S - 6 and
+        //   index >= nextEnd. i >= S clears the first by 6. For the second,
+        //   i < S + 12 <= S + 30 and i < windowEnd <= N, so i < min(N, S + 30)
+        //   whichever term wins -- by 18 when the window is full, and by at
+        //   least 1 at the terminal window.
         //
         // GENERALLY: DOWN needs W - E*C >= C and UP needs W - C >= E*C. Both
         // reduce to W >= C * (E + 1) = 18 at today's C and E. That LOWER BOUND
@@ -570,14 +619,21 @@
         // a state to ship.
         //
         // Paging adds one more caller: requestNextPage() calls
-        // extendWindowForward(focusedIndex()) when a page lands. On a full
-        // window that is the SAME test and the SAME +C step as the down branch
-        // above, so the derivation covers it unchanged. One step is enough to
-        // unstick downward traversal: the row below the focused card is at
-        // index i + C <= (S + 35) + 6 = S + 41, and nextEnd is min(N, S + 42),
-        // so that row is inside [nextStart, nextEnd) whenever it exists at
-        // all. On a SHORT window the fill branch runs instead, which removes
-        // nothing and mounts every row the page made available.
+        // extendWindowForward(focusedIndex()) when a page lands. It may FILL
+        // first -- removal-free, and it moves no index, so the derivation
+        // below applies to whatever it hands on -- and then runs the SAME down
+        // test with the SAME +C step, on a window the fill has made full. So
+        // the derivation covers the paging path unchanged.
+        //
+        // ONE STEP IS ENOUGH to unstick downward traversal, which is what
+        // makes the fill-then-slide pair sufficient rather than needing a
+        // loop. After the slide the row below the focused card is at index
+        // i + C <= (S + 35) + 6 = S + 41, and nextEnd is min(N, S + 42): if
+        // N >= S + 42 that row is below S + 42, and if N < S + 42 the row
+        // exists only when i + C < N = nextEnd. Either way it is inside
+        // [nextStart, nextEnd). Filling ALONE is not enough -- it mounts rows
+        // above and beside the cursor but none below it, which is why the
+        // slide must still be evaluated afterwards.
         //
         // Note that sliding is NOT an append-only operation: moveWindow()
         // removes the C cards that fall below the new nextStart before

@@ -466,6 +466,93 @@ test('a short first page fills the window instead of sliding it off the cursor',
     }
 });
 
+// ---- Regression: filling must not strand Down on the terminal row --------
+//
+// Preserving the focused node and RESTORING NAVIGATION are separate
+// properties, and the first fix delivered only the first. A cursor parked on
+// the last loaded row -- exactly where a viewer waiting for a page is -- had
+// its window filled, which mounts rows ABOVE and BESIDE it but none below, so
+// ArrowDown still had no candidate. MEASURED before the fix: 31 items with the
+// cursor on index 30, then 96 more delivered; the window filled [0,36) and
+// four successive Downs left the cursor on 30. Right-Left-Down reached 36.
+// That is the same user-visible symptom PR #25 fixed -- a remote key that
+// looks broken -- so it is asserted here on real key presses, with no lateral
+// move anywhere in the assertion path.
+//
+// Both window starts are covered, because they reach the state differently:
+// FIRST_PAGE 31 never slides at all and lands with start 0, while FIRST_PAGE
+// 37 slides once on the way down and lands with a nonzero start and a window
+// that is short because the items ran out rather than because none arrived.
+for (const [firstPage, description] of [[31, 'a zero window start'], [37, 'a nonzero window start']]) {
+    test(`a page landing on the terminal row restores ArrowDown at ${description}`, async () => {
+        const browser = await chromium.launch();
+        try {
+            const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+            page.setDefaultTimeout(5000);
+            await signInAsAlice(page);
+            await page.evaluate(() => {
+                window.__removedActive = 0;
+                const removeChild = Node.prototype.removeChild;
+                Node.prototype.removeChild = function (child) {
+                    if (child === document.activeElement) window.__removedActive++;
+                    return removeChild.call(this, child);
+                };
+            });
+            await renderPaged(page, { total: 300, firstPage, holdFrom: firstPage });
+            await page.waitForFunction(() => window.__held.length === 1);
+
+            // Walk to the first card of the LAST LOADED ROW with real presses.
+            const terminalRow = Math.ceil(firstPage / COLUMNS) - 1;
+            for (let row = 0; row < terminalRow; row++) await pressAndAssertFocus(page, 'ArrowDown');
+            const focusedIndex = terminalRow * COLUMNS;
+            assert.equal((await focusSnapshot(page)).id, 'page-' + focusedIndex);
+
+            // PRECONDITIONS. The cursor must genuinely have nothing below it,
+            // the window must genuinely be short, and -- for the second case --
+            // the start must genuinely be nonzero. Without these the test
+            // could pass on a state that was never stuck.
+            const windowBefore = await assertWindow(page);
+            assert.ok(windowBefore.length < WINDOW_SIZE,
+                `the window must be short on arrival, held ${windowBefore.length}`);
+            assert.equal(windowBefore[windowBefore.length - 1], firstPage - 1,
+                'the window must reach the last loaded item');
+            assert.equal(focusedIndex >= firstPage - COLUMNS, true,
+                'the cursor must be on the last loaded row, with nothing below it');
+            assert.equal(await pressAndAssertFocus(page, 'ArrowDown'), 'page-' + focusedIndex,
+                'ArrowDown must have nowhere to go before the page lands');
+            if (firstPage === 37) {
+                assert.ok(windowBefore[0] > 0, 'this case must have slid to a nonzero window start');
+            } else {
+                assert.equal(windowBefore[0], 0, 'this case must still be at window start 0');
+            }
+
+            const paddingBefore = await gridPaddingBottom(page);
+            await page.evaluate(() => window.__held[0]());
+            await waitForAppendedPage(page, paddingBefore);
+
+            // Focus retained...
+            const focus = await focusSnapshot(page);
+            assert.equal(focus.id, 'page-' + focusedIndex, 'the arriving page must not move the cursor');
+            assert.equal(focus.body, false);
+            assert.equal(focus.attached, true);
+            assert.equal(focus.painted, true);
+            assert.equal(await page.evaluate(() => window.__removedActive), 0,
+                'no window update may remove the focused node');
+
+            // ...AND navigation restored, with no lateral move to unstick it.
+            for (let step = 1; step <= 4; step++) {
+                assert.equal(await pressAndAssertFocus(page, 'ArrowDown'),
+                    'page-' + (focusedIndex + step * COLUMNS),
+                    'ArrowDown must advance immediately after the page lands');
+            }
+            assert.equal(await page.evaluate(() => window.__removedActive), 0);
+            await assertWindow(page);
+        } finally {
+            await browser.close();
+        }
+    });
+}
+
 test('a page held until after the user selects the rail does not take the cursor', async () => {
     const browser = await chromium.launch();
     try {

@@ -590,10 +590,17 @@
             // both of moveWindow()'s clamps are multiples of C -- so every
             // step is exactly one visual row.
             //
+            // SCOPE. An earlier revision of this note claimed every shift
+            // here runs on a full window. That is wrong: the FORWARD shift
+            // does, because its own test refuses a window whose end is the
+            // item count -- but the BACKWARD shift runs on the TERMINAL SHORT
+            // window every time a viewer walks back up from the end of a long
+            // season. So the up derivation below assumes nothing about
+            // fullness, and only the down one does.
+            //
             // RE-DERIVED at today's W = 36, C = 6, E = 2 (this screen was
             // 48/4/2 before six columns, and 36/6/2 is a second change on
-            // top). A shift only ever runs on a FULL window here, so
-            // windowEnd = S + W throughout:
+            // top):
             //
             //   DOWN triggers at i >= windowEnd - E*C = S + 24, so i is in
             //   [S + 24, S + 36). nextStart = S + 6, nextEnd = min(N, S + 42),
@@ -601,10 +608,14 @@
             //   least S + 37. The removal ranges -- below S + 6, and at or
             //   above nextEnd -- both miss i, by 18 and by at least 2.
             //
-            //   UP triggers at i < S + E*C = S + 12 with S > 0, so i is in
-            //   [S, S + 12). nextStart = S - 6, nextEnd = S + 30 (a full
-            //   window means N >= S + 36). The removal ranges -- below S - 6,
-            //   and at or above S + 30 -- both miss i, by 6 and by 18.
+            //   UP triggers at i < S + E*C = S + 12 with S > 0. i is a
+            //   MOUNTED index, so i is in [S, windowEnd) and therefore in
+            //   [S, S + 12). nextStart = S - 6 and nextEnd = min(N, S + 30).
+            //   The removal ranges are below S - 6, which i >= S clears by 6,
+            //   and at or above nextEnd, which i clears because i < S + 12 <=
+            //   S + 30 and i < windowEnd <= N. NO fullness is assumed, which
+            //   is what makes this hold at the terminal short window -- the
+            //   32-card [648,680) state on a 680-item list, for one.
             //
             // GENERALLY: DOWN needs W - E*C >= C and UP needs W - C >= E*C.
             // Both reduce to W >= C * (E + 1) = 18 at today's C and E. That
@@ -614,19 +625,19 @@
             // the trigger zone overlaps the removal range and the focused card
             // can be evicted.
             //
-            // WHY THE FULL-WINDOW PRECONDITION HOLDS HERE, which is exactly
-            // what library.js could not assume. This screen does not page: a
+            // WHY NO FILL BRANCH IS NEEDED HERE, which is the one thing
+            // library.js could not do without. This screen does not page: a
             // season's episode list arrives whole and `items` never grows
-            // after mountEpisodes(). So a window that is short is short
-            // because it holds the ENTIRE season, and then
-            // windowEnd === items.length -- which is precisely what the down
-            // branch below refuses. The window therefore never slides while
-            // short, and the terminal short window at the bottom of a long
-            // season only ever shifts UP, whose derivation above needs no
-            // lower bound on windowEnd beyond a full old window. library.js
-            // has an asynchronous case this does not, and handles it in
-            // extendWindowForward(); if paging is ever added here, that branch
-            // has to come with it.
+            // after mountEpisodes() -- a season change replaces the whole
+            // closure rather than appending to it. So a short window is short
+            // because it already holds every REMAINING item, i.e.
+            // windowEnd === items.length, which is precisely what the down
+            // branch below refuses. (That is the tail of the season, not the
+            // whole season; an earlier revision of this note said otherwise.)
+            // Nothing can ever append items underneath the cursor here, so
+            // there is no state where a window must be filled before it can
+            // slide. If paging is ever added to this screen, library.js's
+            // fill-then-slide branch has to come with it.
             //
             // WINDOW_SIZE 36 is a multiple of COLUMNS = 6, so a window edge
             // still falls on a row boundary.
