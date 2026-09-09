@@ -587,10 +587,15 @@ test('Movies rail entry opens only Movies alphabetically and returns from Detail
             SortOrder: 'Ascending', StartIndex: 0, Limit: 96 }
     }]);
     const movieIds = await ids(page, '.jq-library-grid .jq-media-card');
-    assert.ok(movieIds.length > 1);
+    assert.equal(movieIds.length, 10, 'all fixture Movies fit in the shared mounted window');
     assert.ok(movieIds.every(id => id.startsWith('movie-')), 'exclude Series and Episodes');
     const titles = await page.locator('.jq-media-card-title').allTextContents();
-    assert.deepEqual(titles, [...titles].sort((a, b) => a.localeCompare(b)));
+    // SortName puts the article-prefixed display title under L, not T.
+    assert.deepEqual(titles, [
+        'Blue Hour', 'Field Notes', 'Harbor Lights', 'The Long Way Round',
+        'Low Tide', 'Open Water', 'Quiet Signal', 'Second Frost', 'Static Bloom',
+        'The Long Winter',
+    ], 'Movies must follow SortName order rather than display Name order');
     const selected = await page.locator(':focus').getAttribute('data-item-id');
     assert.equal(selected, movieIds[0]);
     await assertPainted(page.locator(':focus'));

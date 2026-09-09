@@ -178,7 +178,13 @@ test('the rail itself: down/up move through its items, right leaves it for Home 
             };
         });
         assert.equal(geometry.railHeight, 1080, 'the test must exercise the household viewport height');
-        assert.equal(geometry.scrollRange, 0, 'six rail items must fit without creating a rail scrollport');
+        // Review measured overflow-y: visible: excess content clips rather than
+        // creating a scrollport. Zero scroll range is only a content-fit proxy;
+        // it first fails at 16 items and cannot detect entries 7 through 15.
+        assert.equal(geometry.scrollRange, 0, 'six rail items must fit without overflowing');
+        // These exact measured enumerations are the load-bearing growth guard:
+        // a seventh item fails immediately. Do not replace them with a length
+        // check on the assumption that zero scroll range still protects layout.
         assert.deepEqual(geometry.itemHeights, [46, 46, 46, 46, 46, 46]);
         assert.deepEqual(geometry.itemTops, [48, 118, 188, 258, 328, 398],
             'the sixth item must preserve the measured 24px sibling spacing');

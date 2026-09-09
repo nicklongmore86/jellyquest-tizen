@@ -194,6 +194,12 @@ test('dismissing the exit confirmation on an empty Home leaves focus on somethin
     }
 });
 
+// Review mutation finding: this empty-screen case survives removal of EITHER
+// focusFirst guard individually (expected-focus identity or visible-focus
+// fallback); it fails only when BOTH are removed. This double protection is
+// unchanged from master, not weakened by the Movies rail addition. It is a
+// weaker isolated guard than the delayed Home/Requests siblings with content;
+// do not rely on this test alone to protect either focusFirst condition.
 test('a late empty render does not pull focus off a rail item the user has already selected', async () => {
     const browser = await chromium.launch();
     try {
