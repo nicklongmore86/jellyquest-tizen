@@ -90,6 +90,53 @@ for (const { label, item, id, options, height, shape } of SELECTION_CASES) {
     }));
 }
 
+test('resume landscape is explicit and leaves ordinary movie cards as posters', () => setup(async (page) => {
+    await page.evaluate(() => {
+        const movie = {
+            Id: 'movie', Name: 'Movie', Type: 'Movie', ImageTags: { Primary: 'primary-tag' },
+            BackdropImageTags: ['backdrop-tag']
+        };
+        document.body.appendChild(JellyQuestCards.createCard(movie, { presentation: 'resume-landscape' }));
+        document.body.appendChild(JellyQuestCards.createCard(movie));
+    });
+    await page.waitForFunction(() => window.imageCalls.length === 2);
+    assert.deepEqual(await page.evaluate(() => window.imageCalls), [
+        { id: 'movie', options: { type: 'Backdrop', tag: 'backdrop-tag', maxWidth: 220, maxHeight: 124, quality: 80, format: 'webp', index: 0 } },
+        { id: 'movie', options: { type: 'Primary', tag: 'primary-tag', maxWidth: 220, maxHeight: 330, quality: 80, format: 'webp' } },
+    ]);
+    assert.deepEqual(await page.locator('.jq-card').evaluateAll((cards) => cards.map((card) => ({
+        classes: card.className, height: card.getBoundingClientRect().height
+    }))), [
+        { classes: 'jq-card jq-focusable jq-media-card jq-media-card-episode', height: 204 },
+        { classes: 'jq-card jq-focusable jq-media-card jq-media-card-poster', height: 410 },
+    ]);
+}));
+
+test('resume movie artwork uses Backdrop then Thumb then Primary metadata fallbacks', () => setup(async (page) => {
+    await page.evaluate(() => {
+        [
+            { Id: 'backdrop', BackdropImageTags: ['backdrop-tag'], ImageTags: { Thumb: 'thumb-tag', Primary: 'primary-tag' } },
+            { Id: 'thumb', BackdropImageTags: [], ImageTags: { Thumb: 'thumb-tag', Primary: 'primary-tag' } },
+            { Id: 'primary', BackdropImageTags: [], ImageTags: { Primary: 'primary-tag' } },
+            { Id: 'none', BackdropImageTags: [], ImageTags: {} },
+        ].forEach((item) => document.body.appendChild(JellyQuestCards.createCard(
+            Object.assign({ Name: item.Id, Type: 'Movie' }, item),
+            { presentation: 'resume-landscape' }
+        )));
+    });
+    await page.waitForFunction(() => window.imageCalls.length === 3);
+    assert.deepEqual(await page.evaluate(() => window.imageCalls.map((call) => ({
+        id: call.id, type: call.options.type, index: call.options.index, maxHeight: call.options.maxHeight
+    }))), [
+        { id: 'backdrop', type: 'Backdrop', index: 0, maxHeight: 124 },
+        { id: 'thumb', type: 'Thumb', index: undefined, maxHeight: 124 },
+        { id: 'primary', type: 'Primary', index: undefined, maxHeight: 124 },
+    ]);
+    assert.equal(await page.locator('[data-item-id="none"] img').count(), 0,
+        'a resume movie with no usable image remains text-only');
+    assert.equal((await page.locator('[data-item-id="none"]').boundingBox()).height, 204);
+}));
+
 test('an episode with neither a still nor a parent backdrop stays honest text', () => setup(async (page) => {
     // The fixture's episode-700 shape: no ImageTags.Primary, an empty
     // ParentBackdropImageTags array, and no series poster tag.
@@ -147,13 +194,21 @@ test('an unnumbered episode drops the numbering rather than printing undefined',
 
 test('missing tags and failed image retain readable text without broken icons', () => setup(async (page) => {
     await page.evaluate(() => {
+        document.body.style.display = 'flex';
         document.body.appendChild(JellyQuestCards.createCard({ Id: 'missing', Name: 'No artwork', Type: 'Movie' }));
         window.ApiClient.getImageUrl = function () { return '/missing-artwork.webp'; };
         document.body.appendChild(JellyQuestCards.createCard({ Id: 'broken', Name: 'Failed artwork', ImageTags: { Primary: 'bad' } }));
+        document.body.appendChild(JellyQuestCards.createCard({
+            Id: 'resume-broken', Name: 'Failed resume backdrop', Type: 'Movie',
+            BackdropImageTags: ['bad']
+        }, { presentation: 'resume-landscape' }));
     });
-    await page.waitForFunction(() => document.querySelector('[data-item-id="broken"]').getAttribute('data-artwork-state') === 'error');
+    await page.waitForFunction(() => ['broken', 'resume-broken'].every((id) =>
+        document.querySelector('[data-item-id="' + id + '"]').getAttribute('data-artwork-state') === 'error'));
     assert.equal(await page.locator('.jq-card img').count(), 0);
-    assert.equal(await page.locator('.jq-card').allTextContents().then(x => x.join('|')), 'No artwork|Failed artwork');
+    assert.equal(await page.locator('.jq-card').allTextContents().then(x => x.join('|')),
+        'No artwork|Failed artwork|Failed resume backdrop');
+    assert.equal((await page.locator('[data-item-id="resume-broken"]').boundingBox()).height, 204);
     assert.deepEqual(await page.evaluate(() => window.imageCalls), []);
 }));
 
@@ -188,23 +243,32 @@ test('without IntersectionObserver artwork stays text-only', () => setup(async (
     assert.deepEqual(await page.evaluate(() => window.imageCalls), []);
 }));
 
-test('simulator serves real local posters with stable poster geometry', async () => {
+test('simulator serves landscape resume art while browse movies keep stable poster geometry', async () => {
     const browser = await chromium.launch();
     try {
         const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
         await page.goto(server.baseUrl + '/dev/simulator.html');
         await page.waitForSelector('.jq-profile-card');
         await page.keyboard.press('Enter');
-        await page.waitForFunction(() => {
-            const images = Array.from(document.querySelectorAll('.jq-media-card img'));
-            return images.length > 0 && images.every(img => img.naturalWidth === 220 && img.naturalHeight === 330);
-        });
-        const image = page.locator('.jq-media-card img').first();
-        const bounds = await image.boundingBox();
-        assert.equal(bounds.width, 220);
-        assert.equal(bounds.height, 330);
-        await page.waitForFunction(() => document.querySelector('[data-item-id="movie-10"] img')?.naturalWidth === 220);
-        assert.equal(await page.locator('[data-item-id="movie-10"] img').count(), 1);
+        const resumeMovie = page.locator('.jq-home-row-section').first().locator('[data-item-id="movie-1"] img');
+        const resumeFallback = page.locator('.jq-home-row-section').first().locator('[data-item-id="movie-3"] img');
+        const browseMovie = page.locator('.jq-home-row-section').last().locator('[data-item-id="movie-10"] img');
+        await page.waitForFunction(() => [
+            document.querySelector('.jq-home-row-section:first-child [data-item-id="movie-1"] img'),
+            document.querySelector('.jq-home-row-section:first-child [data-item-id="movie-3"] img'),
+            document.querySelector('.jq-home-row-section:last-child [data-item-id="movie-10"] img'),
+        ].every((image) => image && image.naturalWidth === 220));
+        assert.deepEqual(await resumeMovie.evaluate((image) => ({
+            natural: [image.naturalWidth, image.naturalHeight], box: [image.offsetWidth, image.offsetHeight]
+        })), { natural: [220, 124], box: [220, 124] }, 'resume Movies prefer their 16:9 Backdrop');
+        assert.deepEqual(await resumeFallback.evaluate((image) => ({
+            natural: [image.naturalWidth, image.naturalHeight], box: [image.offsetWidth, image.offsetHeight]
+        })), { natural: [220, 330], box: [220, 124] }, 'the no-backdrop Movie reaches its Primary terminal fallback without stretching');
+        assert.deepEqual(await browseMovie.evaluate((image) => ({
+            natural: [image.naturalWidth, image.naturalHeight], box: [image.offsetWidth, image.offsetHeight],
+            card: image.parentElement.getBoundingClientRect().height
+        })), { natural: [220, 330], box: [220, 330], card: 410 },
+        'Recently Added keeps Movie portrait posters outside the resume presentation');
         await page.screenshot({ path: '.cache/artwork-preview.png' });
     } finally { await browser.close(); }
 });

@@ -65,6 +65,9 @@ test('fixture models root views, recursive and parent scope, type filters, bound
     const episodes = all.filter(item => item.Type === 'Episode');
     assert.equal(episodes.filter(item => item.ParentBackdropImageTags.length).length, 699);
     assert.ok(episodes.every(item => item.SeriesId && item.SeriesName && item.SeasonId && item.ParentIndexNumber && item.IndexNumber && item.ParentBackdropItemId));
+    const movies = all.filter(item => item.Type === 'Movie');
+    assert.equal(movies.filter(item => item.BackdropImageTags.length).length, 9,
+        'fixture mirrors near-universal movie backdrop coverage with one Primary-only terminal fallback');
     // The other direction of the same principle as the option guard below:
     // the fixture must not RETURN fields the real server does not. MEASURED
     // against Jellyfin 10.11.11, a list response carries none of these; the
@@ -212,8 +215,27 @@ test('Home and Library use independent media queries and Library reaches beyond 
     await signIn(page);
     assert.deepEqual(await page.evaluate(() => window.__queries[0]), { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' });
     assert.deepEqual(await ids(page, '.jq-home-row-section:first-child .jq-media-card'), ['movie-1', 'episode-516', 'movie-3']);
+    const continueCards = await page.locator('.jq-home-row-section:first-child .jq-media-card').evaluateAll((cards) =>
+        cards.map((card) => ({ id: card.dataset.itemId, height: card.getBoundingClientRect().height,
+            shape: card.classList.contains('jq-media-card-episode') ? 'landscape' : 'poster' })));
+    assert.deepEqual(continueCards, [
+        { id: 'movie-1', height: 204, shape: 'landscape' },
+        { id: 'episode-516', height: 204, shape: 'landscape' },
+        { id: 'movie-3', height: 204, shape: 'landscape' },
+    ], 'Continue Watching must be one level 16:9 resume row even when item types are mixed');
+    const progress = await page.locator('.jq-home-row-section:first-child [data-item-id="movie-1"] .jq-media-card-progress').evaluate((bar) => {
+        const card = bar.parentElement.getBoundingClientRect();
+        const bounds = bar.getBoundingClientRect();
+        return { inside: bounds.left >= card.left && bounds.right <= card.right && bounds.top >= card.top && bounds.bottom <= card.bottom,
+            overflow: getComputedStyle(bar).overflow };
+    });
+    assert.deepEqual(progress, { inside: true, overflow: 'hidden' },
+        'resume progress remains inside the landscape card and clips only its fill');
     assert.equal(await page.locator('.jq-home-row-section').nth(1).locator('.jq-media-card').count(), 8);
     assert.ok((await ids(page, '.jq-home-row-section:nth-child(2) .jq-media-card')).includes('series-1'));
+    assert.equal(await page.locator('.jq-home-row-section:nth-child(2) .jq-media-card').evaluateAll((cards) =>
+        cards.every((card) => card.getBoundingClientRect().height === 410)), true,
+    'Recently Added remains a poster row');
     await page.keyboard.press('ArrowDown');
     const rowItems = await page.locator('.jq-see-all').locator('..').locator('.jq-focusable').count();
     for (let i = 1; i < rowItems; i++) await page.keyboard.press('ArrowRight');
@@ -223,6 +245,9 @@ test('Home and Library use independent media queries and Library reaches beyond 
     assert.equal(await page.locator('.jq-library-screen').count(), 1);
     await page.waitForSelector('.jq-library-grid .jq-media-card');
     assert.equal(await page.locator('.jq-library-grid .jq-media-card').count(), 48);
+    assert.equal(await page.locator('.jq-library-grid .jq-media-card').evaluateAll((cards) =>
+        cards.every((card) => card.getBoundingClientRect().height === 410)), true,
+    'Movie/Series Library remains a poster grid');
     const libraryIds = await ids(page, '.jq-library-grid .jq-media-card');
     assert.ok(libraryIds.some(id => id.startsWith('movie-')), 'See All must include films');
     assert.ok(libraryIds.some(id => id.startsWith('series-')), 'See All remains a mixed grid');
@@ -402,6 +427,9 @@ test('Search caps its query at 24 remote-reachable results', async () => withPag
         { Recursive: true, IncludeItemTypes: 'Movie,Series', SearchTerm: 'Northern', Limit: 24 }
     ]);
     assert.equal(await page.locator('.jq-search-results .jq-media-card').count(), 24);
+    assert.equal(await page.locator('.jq-search-results .jq-media-card').evaluateAll((cards) =>
+        cards.every((card) => card.getBoundingClientRect().height === 410)), true,
+    'Movie/Series Search remains a poster row');
 }));
 
 test('Search excludes episode crowding so a matching Movie is visible within the cap', async () => withPage(async page => {

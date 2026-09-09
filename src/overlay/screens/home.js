@@ -14,6 +14,7 @@
         var rows = [
             {
                 title: 'Continue Watching',
+                presentation: 'resume-landscape',
                 fetch: function () { return window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' }); },
                 seeAll: false,
             },
@@ -187,6 +188,7 @@
         items.forEach(function (item) {
             rowEl.appendChild(window.JellyQuestCards.createCard(item, {
                 onSelect: function () { callbacks.onSelectItem(item); },
+                presentation: row.presentation,
             }));
         });
         if (row.seeAll) {

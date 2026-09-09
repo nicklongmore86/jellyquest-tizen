@@ -514,11 +514,10 @@ test('a profile whose Next Up is empty still autofocuses a painted first card', 
 }));
 
 test('walking DOWN all three rows and back UP returns to Continue Watching', async () => withPage(async (page) => {
-    // The third up-traversal defect this codebase has had (see PR #21 and
-    // PR #25). Each one was invisible until a test used a geometry where
-    // stranding was structurally possible, so the preconditions that make it
-    // possible are asserted here rather than assumed -- a future fixture that
-    // flattens Home would fail this test instead of passing it vacuously.
+    // Continue Watching and Next Up are now both 16:9 rows, while Recently
+    // Added remains poster-shaped. Keep the actual mixed-height stack and
+    // overflow preconditions pinned: the navigation regression this guards
+    // only appears after the descent scrolls Home, not on a flat fixture.
     await signIn(page, 'user-dana');
     await page.waitForSelector('.jq-media-card');
 
@@ -529,9 +528,8 @@ test('walking DOWN all three rows and back UP returns to Continue Watching', asy
         `Home must genuinely overflow, or nothing can strand: range ${geometry.scrollRange}px`);
     assert.equal(geometry.scrollTop, 0, 'a freshly rendered Home starts at the top');
     const heights = geometry.rows.map((row) => row.cardHeight);
-    assert.ok(heights[1] < heights[0],
-        `the Next Up row must be SHORTER than the row above it -- ${heights.join('/')}px -- `
-        + 'because a reveal sized for the shorter row is what fails to uncover the taller one');
+    assert.deepEqual(heights, [204, 204, 410],
+        'Resume and Next Up must be landscape while Recently Added stays poster-shaped');
 
     const trace = [await cursor(page)];
     for (const key of ['ArrowDown', 'ArrowDown', 'ArrowUp', 'ArrowUp']) {
