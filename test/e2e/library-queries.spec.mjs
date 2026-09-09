@@ -226,11 +226,18 @@ test('Home and Library use independent media queries and Library reaches beyond 
     const progress = await page.locator('.jq-home-row-section:first-child [data-item-id="movie-1"] .jq-media-card-progress').evaluate((bar) => {
         const card = bar.parentElement.getBoundingClientRect();
         const bounds = bar.getBoundingClientRect();
-        return { inside: bounds.left >= card.left && bounds.right <= card.right && bounds.top >= card.top && bounds.bottom <= card.bottom,
-            overflow: getComputedStyle(bar).overflow };
+        const fill = bar.firstElementChild.getBoundingClientRect();
+        const meta = bar.parentElement.querySelector('.jq-media-card-meta').getBoundingClientRect();
+        return {
+            inside: bounds.left >= card.left && bounds.right <= card.right && bounds.top >= card.top && bounds.bottom <= card.bottom,
+            fillInside: fill.left >= bounds.left && fill.right <= bounds.right && fill.top >= bounds.top && fill.bottom <= bounds.bottom,
+            fillPct: Math.round((fill.width / bounds.width) * 100),
+            metaClearance: Math.round(bounds.top - meta.bottom),
+            overflow: getComputedStyle(bar).overflow
+        };
     });
-    assert.deepEqual(progress, { inside: true, overflow: 'hidden' },
-        'resume progress remains inside the landscape card and clips only its fill');
+    assert.deepEqual(progress, { inside: true, fillInside: true, fillPct: 33, metaClearance: 2, overflow: 'hidden' },
+        'resume progress reads the saved one-third position, clears its metadata and clips only its fill');
     assert.equal(await page.locator('.jq-home-row-section').nth(1).locator('.jq-media-card').count(), 8);
     assert.ok((await ids(page, '.jq-home-row-section:nth-child(2) .jq-media-card')).includes('series-1'));
     assert.equal(await page.locator('.jq-home-row-section:nth-child(2) .jq-media-card').evaluateAll((cards) =>

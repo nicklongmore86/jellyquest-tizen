@@ -43,6 +43,10 @@
             if (item.BackdropImageTags && item.BackdropImageTags.length) {
                 return { id: item.Id, tag: item.BackdropImageTags[0], type: 'Backdrop', index: 0, height: height };
             }
+            // Forward cover, not a live household-server tier: the only
+            // measured Movie without a Backdrop also has no Thumb. Keep the
+            // server-supported landscape rung for future library changes;
+            // the synthetic test proves precedence, not current reachability.
             if (item.ImageTags && item.ImageTags.Thumb) {
                 return { id: item.Id, tag: item.ImageTags.Thumb, type: 'Thumb', index: null, height: height };
             }

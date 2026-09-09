@@ -114,9 +114,15 @@ test('resume landscape is explicit and leaves ordinary movie cards as posters', 
 
 test('resume movie artwork uses Backdrop then Thumb then Primary metadata fallbacks', () => setup(async (page) => {
     await page.evaluate(() => {
+        // Keep every request-producing card inside the observer viewport even
+        // if a regression makes them 410px posters; failures below must come
+        // from the informative source-selection assertion, never a timeout.
+        document.body.style.display = 'flex';
         [
             { Id: 'backdrop', BackdropImageTags: ['backdrop-tag'], ImageTags: { Thumb: 'thumb-tag', Primary: 'primary-tag' } },
-            { Id: 'thumb', BackdropImageTags: [], ImageTags: { Thumb: 'thumb-tag', Primary: 'primary-tag' } },
+            // BackdropImageTags is deliberately absent, matching a permissive
+            // list DTO as well as exercising the guarded property access.
+            { Id: 'thumb', ImageTags: { Thumb: 'thumb-tag', Primary: 'primary-tag' } },
             { Id: 'primary', BackdropImageTags: [], ImageTags: { Primary: 'primary-tag' } },
             { Id: 'none', BackdropImageTags: [], ImageTags: {} },
         ].forEach((item) => document.body.appendChild(JellyQuestCards.createCard(
