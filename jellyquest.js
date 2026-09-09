@@ -2367,8 +2367,29 @@
     // image letterboxed by `object-fit: contain` to 124 * 220/330 = 82.7px
     // inside a 220px still box, and identical on every affected episode of the
     // same show. The parent backdrop is 16:9 and fills the slot.
-    function artworkSource(item) {
-        var height = isPosterShaped(item) ? POSTER_HEIGHT : STILL_HEIGHT;
+    function artworkSource(item, presentation) {
+        var resumeLandscape = presentation === 'resume-landscape';
+        var height = resumeLandscape ? STILL_HEIGHT : (isPosterShaped(item) ? POSTER_HEIGHT : STILL_HEIGHT);
+        // Continue Watching is a resume surface rather than a browse surface.
+        // Its mixed Movie/Episode result needs one landscape shape, and the
+        // measured list response already carries every tag used here. Keep
+        // this presentation-specific so Movies remain poster cards elsewhere.
+        if (resumeLandscape && item.Type === 'Movie') {
+            if (item.BackdropImageTags && item.BackdropImageTags.length) {
+                return { id: item.Id, tag: item.BackdropImageTags[0], type: 'Backdrop', index: 0, height: height };
+            }
+            // Forward cover, not a live household-server tier: the only
+            // measured Movie without a Backdrop also has no Thumb. Keep the
+            // server-supported landscape rung for future library changes;
+            // the synthetic test proves precedence, not current reachability.
+            if (item.ImageTags && item.ImageTags.Thumb) {
+                return { id: item.Id, tag: item.ImageTags.Thumb, type: 'Thumb', index: null, height: height };
+            }
+            if (item.ImageTags && item.ImageTags.Primary) {
+                return { id: item.Id, tag: item.ImageTags.Primary, type: 'Primary', index: null, height: height };
+            }
+            return null;
+        }
         if (item.ImageTags && item.ImageTags.Primary) {
             return { id: item.Id, tag: item.ImageTags.Primary, type: 'Primary', index: null, height: height };
         }
@@ -2568,12 +2589,14 @@
 
     function createCard(item, options) {
         options = options || {};
-        var source = artworkSource(item);
+        var source = artworkSource(item, options.presentation);
+        var resumeLandscape = options.presentation === 'resume-landscape';
         var card = document.createElement('button');
         card.className = 'jq-card jq-focusable jq-media-card';
         card.setAttribute('data-item-id', item.Id);
-        if (isPosterShaped(item)) card.className += ' jq-media-card-poster';
+        if (!resumeLandscape && isPosterShaped(item)) card.className += ' jq-media-card-poster';
         else if (item.Type === 'Episode' || source) card.className += ' jq-media-card-episode';
+        else if (resumeLandscape) card.className += ' jq-media-card-episode';
 
         var text = cardText(item, options.context);
         var title = document.createElement('span');
@@ -2891,6 +2914,7 @@
         var rows = [
             {
                 title: 'Continue Watching',
+                presentation: 'resume-landscape',
                 fetch: function () { return window.ApiClient.getItems(userId, { Recursive: true, IncludeItemTypes: 'Movie,Episode', Filters: 'IsResumable', SortBy: 'DatePlayed', SortOrder: 'Descending' }); },
                 seeAll: false,
             },
@@ -3064,6 +3088,7 @@
         items.forEach(function (item) {
             rowEl.appendChild(window.JellyQuestCards.createCard(item, {
                 onSelect: function () { callbacks.onSelectItem(item); },
+                presentation: row.presentation,
             }));
         });
         if (row.seeAll) {

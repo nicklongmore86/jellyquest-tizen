@@ -513,39 +513,50 @@ test('a profile whose Next Up is empty still autofocuses a painted first card', 
     await assertPainted(page.locator(':focus'));
 }));
 
-test('walking DOWN all three rows and back UP returns to Continue Watching', async () => withPage(async (page) => {
-    // The third up-traversal defect this codebase has had (see PR #21 and
-    // PR #25). Each one was invisible until a test used a geometry where
-    // stranding was structurally possible, so the preconditions that make it
-    // possible are asserted here rather than assumed -- a future fixture that
-    // flattens Home would fail this test instead of passing it vacuously.
+test('walking DOWN four rows and back UP returns to Continue Watching', async () => withPage(async (page) => {
+    // PR #34 fixed a strand that occurs only when descent has pushed the row
+    // we need to return to above the viewport. The three production rows now
+    // fit too closely to create that condition, so insert a fourth copy of a
+    // real landscape row as a traversal fixture. The decisive precondition below
+    // measures the original row at a negative top after descent; scroll range
+    // alone is insufficient because trailing margin can create harmless range.
     await signIn(page, 'user-dana');
     await page.waitForSelector('.jq-media-card');
+    await page.evaluate(() => {
+        var sections = document.querySelectorAll('.jq-home-row-section');
+        var probe = sections[1].cloneNode(true);
+        probe.querySelector('.jq-home-row-heading').textContent = 'Traversal Probe';
+        sections[2].parentNode.insertBefore(probe, sections[2]);
+    });
 
     const geometry = await homeGeometry(page);
     assert.deepEqual(geometry.rows.map((row) => row.title),
-        ['Continue Watching', 'Next Up', 'Recently Added'], 'this profile must have three rows');
-    assert.ok(geometry.scrollRange > 0,
-        `Home must genuinely overflow, or nothing can strand: range ${geometry.scrollRange}px`);
+        ['Continue Watching', 'Next Up', 'Traversal Probe', 'Recently Added'],
+        'the traversal fixture must have four rows');
     assert.equal(geometry.scrollTop, 0, 'a freshly rendered Home starts at the top');
     const heights = geometry.rows.map((row) => row.cardHeight);
-    assert.ok(heights[1] < heights[0],
-        `the Next Up row must be SHORTER than the row above it -- ${heights.join('/')}px -- `
-        + 'because a reveal sized for the shorter row is what fails to uncover the taller one');
+    assert.deepEqual(heights, [204, 204, 204, 410],
+        'Resume, Next Up and its probe must stay landscape while Recently Added stays poster-shaped');
 
     const trace = [await cursor(page)];
-    for (const key of ['ArrowDown', 'ArrowDown', 'ArrowUp', 'ArrowUp']) {
+    for (const key of ['ArrowDown', 'ArrowDown', 'ArrowDown']) {
+        await page.keyboard.press(key);
+        trace.push(await cursor(page));
+    }
+    const rowZeroTop = await page.locator('.jq-home-row-section').first().locator('.jq-media-card').first()
+        .evaluate((card) => Math.round(card.getBoundingClientRect().top));
+    assert.ok(rowZeroTop < 0,
+        `descent must push row 0 to a negative top where the shipped strand can fire: ${rowZeroTop}px; trace ${JSON.stringify(trace)}`);
+
+    for (const key of ['ArrowUp', 'ArrowUp', 'ArrowUp']) {
         await page.keyboard.press(key);
         trace.push(await cursor(page));
     }
     assert.deepEqual(trace.map((step) => step.row), [
-        'Continue Watching', 'Next Up', 'Recently Added', 'Next Up', 'Continue Watching',
+        'Continue Watching', 'Next Up', 'Traversal Probe', 'Recently Added',
+        'Traversal Probe', 'Next Up', 'Continue Watching',
     ], 'the walk down must retrace exactly, and never leave the screen for the rail');
-
-    // The descent has to have actually scrolled, or the return trip never
-    // faced the condition that strands it.
-    assert.ok(trace[2].row === 'Recently Added');
-    assert.equal(trace[4].id, trace[0].id, 'the round trip must end on the card it started from');
+    assert.equal(trace[6].id, trace[0].id, 'the round trip must end on the card it started from');
     assert.equal((await homeGeometry(page)).scrollTop, 0,
         'returning to the first row must scroll Home back to the top');
     await assertPainted(page.locator(':focus'));

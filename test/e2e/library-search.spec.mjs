@@ -129,6 +129,27 @@ test('the hardware Back button returns from Search to Home', async () => {
     }
 });
 
+test('a Movie remains a poster after returning from Detail to Library', async () => {
+    const browser = await chromium.launch();
+    try {
+        const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+        await signInAsAlice(page);
+        await page.locator('.jq-see-all').click();
+        await page.waitForSelector('.jq-library-grid [data-item-id="movie-10"]');
+        await page.locator('.jq-library-grid [data-item-id="movie-10"]').click();
+        await page.waitForSelector('.jq-detail-screen');
+        await page.keyboard.press('Escape');
+        await page.waitForSelector('.jq-library-grid [data-item-id="movie-10"]');
+        assert.deepEqual(await page.locator('.jq-library-grid [data-item-id="movie-10"]').evaluate((card) => ({
+            height: card.getBoundingClientRect().height,
+            poster: card.classList.contains('jq-media-card-poster'),
+            landscape: card.classList.contains('jq-media-card-episode'),
+        })), { height: 410, poster: true, landscape: false });
+    } finally {
+        await browser.close();
+    }
+});
+
 test('switching between Home and Search via the rail always lands on a fresh screen', async () => {
     const browser = await chromium.launch();
     try {

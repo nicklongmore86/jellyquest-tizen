@@ -76,6 +76,11 @@
             Type: 'Movie',
             ServerId: SERVER_ID,
             ImageTags: { Primary: 'preview-v1' },
+            // MEASURED against both household movie libraries: all but one
+            // Movie carry a BackdropImageTags entry in list responses. Keep
+            // movie-3 Primary-only to exercise that real terminal fallback;
+            // the measured exception has no Thumb either, so none is invented.
+            BackdropImageTags: movie.Id === 'movie-3' ? [] : ['backdrop-v1'],
             IsFolder: false,
             ParentId: 'movies',
             DateCreated: '2026-08-' + ('0' + movie.Id.split('-')[1]).slice(-2) + 'T00:00:00Z',
@@ -556,10 +561,10 @@
             Object.keys(options).forEach(function (key) {
                 if (modeled.indexOf(key) === -1) throw new Error('Unmodeled getImageUrl option: ' + key);
             });
-            // The real server serves many more image types (Logo, Thumb,
-            // Banner...). Only the two the app asks for are modeled, matching
-            // this stub's convention of rejecting what the app never sends.
-            if (options.type !== 'Primary' && options.type !== 'Backdrop') {
+            // The real server serves more image types. Model only the three
+            // the app asks for; Art/Screenshot/Banner have zero measured
+            // movie coverage and do not belong in the production fallback.
+            if (options.type !== 'Primary' && options.type !== 'Backdrop' && options.type !== 'Thumb') {
                 throw new Error('Unmodeled image type: ' + options.type);
             }
             // The real client turns type/index into path components, so index
@@ -574,7 +579,7 @@
                 return encodeURIComponent(key) + '=' + encodeURIComponent(options[key]);
             }).join('&');
             // 220x124, so a backdrop fills a 16:9 still slot exactly.
-            if (options.type === 'Backdrop') return '/dev/fixtures/artwork/backdrop-1.webp?' + query;
+            if (options.type === 'Backdrop' || options.type === 'Thumb') return '/dev/fixtures/artwork/backdrop-1.webp?' + query;
             // Unknown/parent IDs reuse a real placeholder instead of a NaN path.
             var match = /^movie-([1-9][0-9]*)$/.exec(String(itemId || ''));
             var number = match ? Number(match[1]) : 1;
